@@ -3923,7 +3923,7 @@ RegExpCharacterClass::is_standard(LifoAlloc* alloc)
 {
     // TODO(lrn): Remove need for this function, by not throwing away information
     // along the way.
-    if (is_negated_)
+    if (is_negated())
         return false;
     if (set_.is_standard())
         return true;

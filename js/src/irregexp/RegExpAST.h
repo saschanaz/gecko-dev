@@ -31,8 +31,10 @@
 #ifndef V8_REGEXP_AST_H_
 #define V8_REGEXP_AST_H_
 
+#include "mozilla/EnumSet.h"
 #include "ds/LifoAlloc.h"
-#include "js/Vector.h"
+#include "irregexp/RegExpTypes.h"
+#include "vm/Unicode.h"
 
 // Prevent msvc build failures as indicated in bug 1205328
 #ifdef min
@@ -66,8 +68,7 @@ class RegExpCompiler;
 class RegExpNode;
 class RegExpTree;
 
-class RegExpVisitor
-{
+class RegExpVisitor {
   public:
     virtual ~RegExpVisitor() { }
 #define MAKE_CASE(Name)                                         \
@@ -76,42 +77,8 @@ class RegExpVisitor
 #undef MAKE_CASE
 };
 
-// InfallibleVector is like Vector, but all its methods are infallible (they
-// crash on OOM). We use this class instead of Vector to avoid a ton of
-// MOZ_MUST_USE warnings in irregexp code (imported from V8).
-template<typename T, size_t N>
-class InfallibleVector
-{
-    Vector<T, N, LifoAllocPolicy<Infallible>> vector_;
-
-    InfallibleVector(const InfallibleVector&) = delete;
-    void operator=(const InfallibleVector&) = delete;
-
-  public:
-    explicit InfallibleVector(const LifoAllocPolicy<Infallible>& alloc) : vector_(alloc) {}
-
-    void append(const T& t) { MOZ_ALWAYS_TRUE(vector_.append(t)); }
-    void append(const T* begin, size_t length) { MOZ_ALWAYS_TRUE(vector_.append(begin, length)); }
-
-    void clear() { vector_.clear(); }
-    void popBack() { vector_.popBack(); }
-    void reserve(size_t n) { MOZ_ALWAYS_TRUE(vector_.reserve(n)); }
-
-    size_t length() const { return vector_.length(); }
-    T popCopy() { return vector_.popCopy(); }
-
-    T* begin() { return vector_.begin(); }
-    const T* begin() const { return vector_.begin(); }
-
-    T& operator[](size_t index) { return vector_[index]; }
-    const T& operator[](size_t index) const { return vector_[index]; }
-
-    InfallibleVector& operator=(InfallibleVector&& rhs) { vector_ = Move(rhs.vector_); return *this; }
-};
-
 // A simple closed interval.
-class Interval
-{
+class Interval {
   public:
     Interval() : from_(kNone), to_(kNone) { }
 
@@ -126,9 +93,7 @@ class Interval
             return Interval(Min(from_, that.from_), Max(to_, that.to_));
     }
 
-    bool Contains(int value) {
-        return (from_ <= value) && (value <= to_);
-    }
+    bool Contains(int value) { return (from_ <= value) && (value <= to_); }
 
     bool is_empty() { return from_ == kNone; }
 
@@ -148,46 +113,50 @@ typedef InfallibleVector<CharacterRange, 1> CharacterRangeVector;
 
 // Represents code units in the range from from_ to to_, both ends are
 // inclusive.
-class CharacterRange
-{
+class CharacterRange {
   public:
-    CharacterRange()
-      : from_(0), to_(0)
-    {}
+    CharacterRange() : from_(0), to_(0) {}
 
-    CharacterRange(char16_t from, char16_t to)
-      : from_(from), to_(to)
-    {}
+    CharacterRange(uc32 from, uc32 to) : from_(from), to_(to) {}
 
     static void AddClassEscape(LifoAlloc* alloc, char16_t type, CharacterRangeVector* ranges);
-    static void AddClassEscapeUnicode(LifoAlloc* alloc, char16_t type,
-                                      CharacterRangeVector* ranges, bool ignoreCase);
 
-    static inline CharacterRange Singleton(char16_t value) {
+    // Add class escapes. Add case equivalent closure for \w and \W if necessary.
+    static void AddClassEscape(LifoAlloc* alloc, char16_t type, CharacterRangeVector* ranges,
+                               bool add_unicode_case_equivalents);
+
+    static inline CharacterRange Singleton(uc32 value) {
         return CharacterRange(value, value);
     }
-    static inline CharacterRange Range(char16_t from, char16_t to) {
-        MOZ_ASSERT(from <= to);
+    static inline CharacterRange Range(uc32 from, uc32 to) {
+        // TODO(anba): Enable/Fix assertions.
+        // MOZ_ASSERT(0 <= from && to <= unicode::NonBMPMax);
+        MOZ_ASSERT(static_cast<uint32_t>(from) <= static_cast<uint32_t>(to));
         return CharacterRange(from, to);
     }
     static inline CharacterRange Everything() {
-        return CharacterRange(0, 0xFFFF);
+        return CharacterRange(0, unicode::NonBMPMax);
     }
-    bool Contains(char16_t i) { return from_ <= i && i <= to_; }
-    char16_t from() const { return from_; }
-    void set_from(char16_t value) { from_ = value; }
-    char16_t to() const { return to_; }
-    void set_to(char16_t value) { to_ = value; }
-    bool is_valid() { return from_ <= to_; }
-    bool IsEverything(char16_t max) { return from_ == 0 && to_ >= max; }
-    bool IsSingleton() { return (from_ == to_); }
-    void AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeVector* ranges);
+    static inline CharacterRangeVector* List(LifoAlloc* alloc,
+                                             CharacterRange range) {
+        CharacterRangeVector* list = alloc->newInfallible<CharacterRangeVector>(*alloc);
+        list->append(range);
+        return list;
+    }
 
-    static void Split(const LifoAlloc* alloc,
-                      CharacterRangeVector base,
-                      const Vector<int>& overlay,
-                      CharacterRangeVector* included,
-                      CharacterRangeVector* excluded);
+    bool Contains(uc32 i) { return from_ <= i && i <= to_; }
+    uc32 from() const { return from_; }
+    void set_from(uc32 value) { from_ = value; }
+    uc32 to() const { return to_; }
+    void set_to(uc32 value) { to_ = value; }
+    bool is_valid() { return from_ <= to_; }
+    bool IsEverything(uc16 max) { return from_ == 0 && to_ >= max; }
+    bool IsSingleton() { return (from_ == to_); }
+
+    static void AddCaseEquivalents(LifoAlloc* alloc,
+                                   CharacterRangeVector* ranges,
+                                   bool is_one_byte);
+    void AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeVector* ranges);
 
     // Whether a range list is in canonical form: Ranges ordered by from value,
     // and ranges non-overlapping and non-adjacent.
@@ -207,26 +176,30 @@ class CharacterRange
     static const int kStartMarker = (1 << 24);
     static const int kPayloadMask = (1 << 24) - 1;
 
+    static void AddClassEscapeUnicode(LifoAlloc* alloc, char16_t type,
+                                      CharacterRangeVector* ranges, bool ignoreCase);
+
+    static void Split(const LifoAlloc* alloc,
+                      CharacterRangeVector base,
+                      const Vector<int>& overlay,
+                      CharacterRangeVector* included,
+                      CharacterRangeVector* excluded);
+
   private:
-    char16_t from_;
-    char16_t to_;
+    uc32 from_;
+    uc32 to_;
 };
 
-class CharacterSet
-{
+class CharacterSet final {
   public:
-    explicit CharacterSet(char16_t standard_set_type)
-      : ranges_(nullptr),
-        standard_set_type_(standard_set_type)
-    {}
+    explicit CharacterSet(uc16 standard_set_type)
+        : ranges_(nullptr), standard_set_type_(standard_set_type) {}
     explicit CharacterSet(CharacterRangeVector* ranges)
-      : ranges_(ranges),
-        standard_set_type_(0)
-    {}
+        : ranges_(ranges), standard_set_type_(0) {}
 
     CharacterRangeVector& ranges(LifoAlloc* alloc);
-    char16_t standard_set_type() { return standard_set_type_; }
-    void set_standard_set_type(char16_t special_set_type) {
+    uc16 standard_set_type() { return standard_set_type_; }
+    void set_standard_set_type(uc16 special_set_type) {
         standard_set_type_ = special_set_type;
     }
     bool is_standard() { return standard_set_type_ != 0; }
@@ -237,16 +210,12 @@ class CharacterSet
 
     // If non-zero, the value represents a standard set (e.g., all whitespace
     // characters) without having to expand the ranges.
-    char16_t standard_set_type_;
+    uc16 standard_set_type_;
 };
 
-class TextElement
-{
+class TextElement final {
   public:
-    enum TextType {
-        ATOM,
-        CHAR_CLASS
-    };
+    enum TextType { ATOM, CHAR_CLASS };
 
     static TextElement Atom(RegExpAtom* atom);
     static TextElement CharClass(RegExpCharacterClass* char_class);
@@ -271,8 +240,7 @@ class TextElement
 
   private:
     TextElement(TextType text_type, RegExpTree* tree)
-      : cp_offset_(-1), text_type_(text_type), tree_(tree)
-    {}
+      : cp_offset_(-1), text_type_(text_type), tree_(tree) {}
 
     int cp_offset_;
     TextType text_type_;
@@ -281,11 +249,11 @@ class TextElement
 
 typedef InfallibleVector<TextElement, 1> TextElementVector;
 
-class RegExpTree
-{
+class RegExpTree {
   public:
     static const int kInfinity = INT32_MAX;
     virtual ~RegExpTree() {}
+    virtual void* Accept(RegExpVisitor* visitor, void* data) = 0;
     virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                                RegExpNode* on_success) = 0;
     virtual bool IsTextElement() { return false; }
@@ -308,43 +276,42 @@ class RegExpTree
 
 typedef InfallibleVector<RegExpTree*, 1> RegExpTreeVector;
 
-class RegExpDisjunction : public RegExpTree
-{
+class RegExpDisjunction final : public RegExpTree {
   public:
     explicit RegExpDisjunction(RegExpTreeVector* alternatives);
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpDisjunction* AsDisjunction();
-    virtual Interval CaptureRegisters();
-    virtual bool IsDisjunction();
-    virtual bool IsAnchoredAtStart();
-    virtual bool IsAnchoredAtEnd();
-    virtual int min_match() { return min_match_; }
-    virtual int max_match() { return max_match_; }
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpDisjunction* AsDisjunction() override;
+    Interval CaptureRegisters() override;
+    bool IsDisjunction() override;
+    bool IsAnchoredAtStart() override;
+    bool IsAnchoredAtEnd() override;
+    int min_match() override { return min_match_; }
+    int max_match() override { return max_match_; }
 
     const RegExpTreeVector& alternatives() { return *alternatives_; }
 
   private:
+    bool SortConsecutiveAtoms(RegExpCompiler* compiler);
+    void RationalizeConsecutiveAtoms(RegExpCompiler* compiler);
+    void FixSingleCharacterDisjunctions(RegExpCompiler* compiler);
     RegExpTreeVector* alternatives_;
     int min_match_;
     int max_match_;
 };
 
-class RegExpAlternative : public RegExpTree
-{
+class RegExpAlternative final : public RegExpTree {
   public:
     explicit RegExpAlternative(RegExpTreeVector* nodes);
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpAlternative* AsAlternative();
-    virtual Interval CaptureRegisters();
-    virtual bool IsAlternative();
-    virtual bool IsAnchoredAtStart();
-    virtual bool IsAnchoredAtEnd();
-    virtual int min_match() { return min_match_; }
-    virtual int max_match() { return max_match_; }
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpAlternative* AsAlternative() override;
+    Interval CaptureRegisters() override;
+    bool IsAlternative() override;
+    bool IsAnchoredAtStart() override;
+    bool IsAnchoredAtEnd() override;
+    int min_match() override { return min_match_; }
+    int max_match() override { return max_match_; }
 
     const RegExpTreeVector& nodes() { return *nodes_; }
 
@@ -354,7 +321,7 @@ class RegExpAlternative : public RegExpTree
     int max_match_;
 };
 
-class RegExpAssertion : public RegExpTree {
+class RegExpAssertion final : public RegExpTree {
  public:
   enum AssertionType {
     START_OF_LINE,
@@ -367,42 +334,49 @@ class RegExpAssertion : public RegExpTree {
     NOT_IN_SURROGATE_PAIR
   };
   explicit RegExpAssertion(AssertionType type) : assertion_type_(type) { }
-  virtual void* Accept(RegExpVisitor* visitor, void* data);
-  virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                             RegExpNode* on_success);
-  virtual RegExpAssertion* AsAssertion();
-  virtual bool IsAssertion();
-  virtual bool IsAnchoredAtStart();
-  virtual bool IsAnchoredAtEnd();
-  virtual int min_match() { return 0; }
-  virtual int max_match() { return 0; }
+  void* Accept(RegExpVisitor* visitor, void* data) override;
+  RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+  RegExpAssertion* AsAssertion() override;
+  bool IsAssertion() override;
+  bool IsAnchoredAtStart() override;
+  bool IsAnchoredAtEnd() override;
+  int min_match() override { return 0; }
+  int max_match() override { return 0; }
   AssertionType assertion_type() { return assertion_type_; }
+
  private:
   AssertionType assertion_type_;
 };
 
-class RegExpCharacterClass : public RegExpTree
-{
+class RegExpCharacterClass final : public RegExpTree {
   public:
+    // NEGATED: The character class is negated and should match everything but
+    //     the specified ranges.
+    enum Flag {
+        NEGATED = 1 << 0,
+    };
+    using Flags = mozilla::EnumSet<Flag>;
+
     RegExpCharacterClass(CharacterRangeVector* ranges, bool is_negated)
-      : set_(ranges),
-        is_negated_(is_negated)
-    {}
+        : set_(ranges), flags_(is_negated ? Flags(NEGATED) : Flags()) {}
 
-    explicit RegExpCharacterClass(char16_t type)
-      : set_(type),
-        is_negated_(false)
-    {}
+    explicit RegExpCharacterClass(CharacterRangeVector* ranges,
+                                  Flags flags = Flags())
+        : set_(ranges), flags_(flags) {}
+    explicit RegExpCharacterClass(uc16 type) : set_(type), flags_() {}
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpCharacterClass* AsCharacterClass();
-    virtual bool IsCharacterClass();
-    virtual bool IsTextElement() { return true; }
-    virtual int min_match() { return 1; }
-    virtual int max_match() { return 1; }
-    virtual void AppendToText(RegExpText* text);
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpCharacterClass* AsCharacterClass() override;
+    bool IsCharacterClass() override;
+    bool IsTextElement() override { return true; }
+    int min_match() override { return 1; }
+    // The character class may match two code units for unicode regexps.
+    // TODO(yangguo): we should split this class for usage in TextElement, and
+    //                make max_match() dependent on the character class content.
+    // FIXME(anba): Change to |return 2| per upstream.
+    int max_match() override { return 1; }
+    void AppendToText(RegExpText* text) override;
 
     CharacterSet character_set() { return set_; }
 
@@ -421,34 +395,29 @@ class RegExpCharacterClass : public RegExpTree
     // D : non-ASCII digit
     // . : non-unicode non-newline
     // * : All characters
-    char16_t standard_type() { return set_.standard_set_type(); }
-
+    uc16 standard_type() { return set_.standard_set_type(); }
     CharacterRangeVector& ranges(LifoAlloc* alloc) { return set_.ranges(alloc); }
-    bool is_negated() { return is_negated_; }
+    bool is_negated() const { return flags_.contains(NEGATED); }
 
   private:
     CharacterSet set_;
-    bool is_negated_;
+    const Flags flags_;
 };
 
-typedef InfallibleVector<char16_t, 10> CharacterVector;
+typedef InfallibleVector<uc16, 10> CharacterVector;
 
-class RegExpAtom : public RegExpTree
-{
+class RegExpAtom final : public RegExpTree {
   public:
-    explicit RegExpAtom(CharacterVector* data)
-      : data_(data)
-    {}
+    explicit RegExpAtom(CharacterVector* data) : data_(data) {}
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpAtom* AsAtom();
-    virtual bool IsAtom();
-    virtual bool IsTextElement() { return true; }
-    virtual int min_match() { return data_->length(); }
-    virtual int max_match() { return data_->length(); }
-    virtual void AppendToText(RegExpText* text);
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpAtom* AsAtom() override;
+    bool IsAtom() override;
+    bool IsTextElement() override { return true; }
+    int min_match() override { return data_->length(); }
+    int max_match() override { return data_->length(); }
+    void AppendToText(RegExpText* text) override;
 
     const CharacterVector& data() { return *data_; }
     int length() { return data_->length(); }
@@ -457,23 +426,18 @@ class RegExpAtom : public RegExpTree
     CharacterVector* data_;
 };
 
-class RegExpText : public RegExpTree
-{
+class RegExpText final : public RegExpTree {
   public:
-    explicit RegExpText(LifoAlloc* alloc)
-      : elements_(*alloc), length_(0)
-    {}
+    explicit RegExpText(LifoAlloc* alloc) : elements_(*alloc), length_(0) {}
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpText* AsText();
-    virtual bool IsText();
-    virtual bool IsTextElement() { return true; }
-    virtual int min_match() { return length_; }
-    virtual int max_match() { return length_; }
-    virtual void AppendToText(RegExpText* text);
-
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpText* AsText() override;
+    bool IsText() override;
+    bool IsTextElement() override { return true; }
+    int min_match() override { return length_; }
+    int max_match() override { return length_; }
+    void AppendToText(RegExpText* text) override;
     void AddElement(TextElement elm)  {
         elements_.append(elm);
         length_ += elm.length();
@@ -485,8 +449,7 @@ class RegExpText : public RegExpTree
     int length_;
 };
 
-class RegExpQuantifier : public RegExpTree
-{
+class RegExpQuantifier final : public RegExpTree {
   public:
     enum QuantifierType { GREEDY, NON_GREEDY, POSSESSIVE };
     RegExpQuantifier(int min, int max, QuantifierType type, RegExpTree* body)
@@ -494,8 +457,7 @@ class RegExpQuantifier : public RegExpTree
         min_(min),
         max_(max),
         min_match_(min * body->min_match()),
-        quantifier_type_(type)
-    {
+        quantifier_type_(type) {
         if (max > 0 && body->max_match() > kInfinity / max) {
             max_match_ = kInfinity;
         } else {
@@ -503,21 +465,16 @@ class RegExpQuantifier : public RegExpTree
         }
     }
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    static RegExpNode* ToNode(int min,
-                              int max,
-                              bool is_greedy,
-                              RegExpTree* body,
-                              RegExpCompiler* compiler,
-                              RegExpNode* on_success,
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    static RegExpNode* ToNode(int min, int max, bool is_greedy, RegExpTree* body,
+                              RegExpCompiler* compiler, RegExpNode* on_success,
                               bool not_at_start = false);
-    virtual RegExpQuantifier* AsQuantifier();
-    virtual Interval CaptureRegisters();
-    virtual bool IsQuantifier();
-    virtual int min_match() { return min_match_; }
-    virtual int max_match() { return max_match_; }
+    RegExpQuantifier* AsQuantifier() override;
+    Interval CaptureRegisters() override;
+    bool IsQuantifier() override;
+    int min_match() override { return min_match_; }
+    int max_match() override { return max_match_; }
     int min() { return min_; }
     int max() { return max_; }
     bool is_possessive() { return quantifier_type_ == POSSESSIVE; }
@@ -534,28 +491,24 @@ class RegExpQuantifier : public RegExpTree
     QuantifierType quantifier_type_;
 };
 
-class RegExpCapture : public RegExpTree
-{
+class RegExpCapture final : public RegExpTree {
   public:
     explicit RegExpCapture(RegExpTree* body, int index)
-      : body_(body), index_(index)
-    {}
+      : body_(body), index_(index) {}
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    static RegExpNode* ToNode(RegExpTree* body,
-                              int index,
-                              RegExpCompiler* compiler,
-                              RegExpNode* on_success);
-    virtual RegExpCapture* AsCapture();
-    virtual bool IsAnchoredAtStart();
-    virtual bool IsAnchoredAtEnd();
-    virtual Interval CaptureRegisters();
-    virtual bool IsCapture();
-    virtual int min_match() { return body_->min_match(); }
-    virtual int max_match() { return body_->max_match(); }
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    static RegExpNode* ToNode(RegExpTree* body, int index,
+                              RegExpCompiler* compiler, RegExpNode* on_success);
+    RegExpCapture* AsCapture() override;
+    bool IsAnchoredAtStart() override;
+    bool IsAnchoredAtEnd() override;
+    Interval CaptureRegisters() override;
+    bool IsCapture() override;
+    int min_match() override { return body_->min_match(); }
+    int max_match() override { return body_->max_match(); }
     RegExpTree* body() { return body_; }
+    void set_body(RegExpTree* body) { body_ = body; }
     int index() { return index_; }
     static int StartRegister(int index) { return index * 2; }
     static int EndRegister(int index) { return index * 2 + 1; }
@@ -565,75 +518,91 @@ class RegExpCapture : public RegExpTree
     int index_;
 };
 
-class RegExpLookahead : public RegExpTree
-{
+class RegExpLookahead final : public RegExpTree {
   public:
-    RegExpLookahead(RegExpTree* body,
-                    bool is_positive,
-                    int capture_count,
+    enum Type { LOOKAHEAD };
+
+    RegExpLookahead(RegExpTree* body, bool is_positive, int capture_count,
                     int capture_from)
       : body_(body),
         is_positive_(is_positive),
         capture_count_(capture_count),
-        capture_from_(capture_from)
-    {}
+        capture_from_(capture_from),
+        type_(LOOKAHEAD) {}
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpLookahead* AsLookahead();
-    virtual Interval CaptureRegisters();
-    virtual bool IsLookahead();
-    virtual bool IsAnchoredAtStart();
-    virtual int min_match() { return 0; }
-    virtual int max_match() { return 0; }
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpLookahead* AsLookahead() override;
+    Interval CaptureRegisters() override;
+    bool IsLookahead() override;
+    bool IsAnchoredAtStart() override;
+    int min_match() override { return 0; }
+    int max_match() override { return 0; }
     RegExpTree* body() { return body_; }
     bool is_positive() { return is_positive_; }
     int capture_count() { return capture_count_; }
     int capture_from() { return capture_from_; }
+    Type type() { return type_; }
+
+    class Builder {
+      public:
+        Builder(bool is_positive, RegExpNode* on_success,
+                int stack_pointer_register, int position_register,
+                int capture_register_count = 0, int capture_register_start = 0);
+        RegExpNode* on_match_success() { return on_match_success_; }
+        RegExpNode* ForMatch(RegExpNode* match);
+
+      private:
+        bool is_positive_;
+        RegExpNode* on_match_success_;
+        RegExpNode* on_success_;
+        int stack_pointer_register_;
+        int position_register_;
+    };
 
   private:
     RegExpTree* body_;
     bool is_positive_;
     int capture_count_;
     int capture_from_;
+    Type type_;
 };
 
 typedef InfallibleVector<RegExpCapture*, 1> RegExpCaptureVector;
 
-class RegExpBackReference : public RegExpTree
-{
+class RegExpBackReference final : public RegExpTree {
   public:
+    RegExpBackReference() : capture_(nullptr) {}
     explicit RegExpBackReference(RegExpCapture* capture)
-      : capture_(capture)
-    {}
+      : capture_(capture) {}
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpBackReference* AsBackReference();
-    virtual bool IsBackReference();
-    virtual int min_match() { return 0; }
-    virtual int max_match() { return capture_->max_match(); }
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpBackReference* AsBackReference() override;
+    bool IsBackReference() override;
+    int min_match() override { return 0; }
+    // The back reference may be recursive, e.g. /(\2)(\1)/. To avoid infinite
+    // recursion, we give up. Ignorance is bliss.
+    // FIXME(anba): Change to kInfinity per upstream.
+    int max_match() override { return capture_->max_match(); }
     int index() { return capture_->index(); }
     RegExpCapture* capture() { return capture_; }
+    void set_capture(RegExpCapture* capture) { capture_ = capture; }
+
   private:
     RegExpCapture* capture_;
 };
 
-class RegExpEmpty : public RegExpTree
-{
+class RegExpEmpty final : public RegExpTree {
   public:
-    RegExpEmpty()
-    {}
+    RegExpEmpty() {}
 
-    virtual void* Accept(RegExpVisitor* visitor, void* data);
-    virtual RegExpNode* ToNode(RegExpCompiler* compiler,
-                               RegExpNode* on_success);
-    virtual RegExpEmpty* AsEmpty();
-    virtual bool IsEmpty();
-    virtual int min_match() { return 0; }
-    virtual int max_match() { return 0; }
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
+    RegExpEmpty* AsEmpty() override;
+    bool IsEmpty() override;
+    int min_match() override { return 0; }
+    int max_match() override { return 0; }
     static RegExpEmpty* GetInstance() {
         static RegExpEmpty instance;
         return &instance;
