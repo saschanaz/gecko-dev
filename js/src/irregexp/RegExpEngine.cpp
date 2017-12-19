@@ -337,9 +337,12 @@ class irregexp::RegExpCompiler {
                         int capture_count);
 
     inline void AddWork(RegExpNode* node) {
-        AutoEnterOOMUnsafeRegion oomUnsafe;
-        if (!work_list_.append(node))
-            oomUnsafe.crash("AddWork");
+        if (!node->on_work_list() && !node->label()->bound()) {
+            AutoEnterOOMUnsafeRegion oomUnsafe;
+            node->set_on_work_list(true);
+            if (!work_list_.append(node))
+                oomUnsafe.crash("AddWork");
+        }
     }
 
     static const int kImplementationOffset = 0;
@@ -365,6 +368,12 @@ class irregexp::RegExpCompiler {
         return unicode() && ignore_case();
     }
     inline bool one_byte() { return one_byte_; }
+    inline bool optimize() { return optimize_; }
+    inline void set_optimize(bool value) { optimize_ = value; }
+    inline bool limiting_recursion() { return limiting_recursion_; }
+    inline void set_limiting_recursion(bool value) {
+        limiting_recursion_ = value;
+    }
     bool read_backward() { return read_backward_; }
     void set_read_backward(bool value) { read_backward_ = value; }
     FrequencyCollator* frequency_collator() { return &frequency_collator_; }
@@ -394,6 +403,8 @@ class irregexp::RegExpCompiler {
     bool one_byte_;
     bool match_only_;
     bool reg_exp_too_big_;
+    bool limiting_recursion_;
+    bool optimize_;
     bool read_backward_;
     int current_expansion_factor_;
     FrequencyCollator frequency_collator_;
@@ -425,6 +436,8 @@ RegExpCompiler::RegExpCompiler(JSContext* cx, Zone* zone, int capture_count,
     one_byte_(one_byte),
     match_only_(match_only),
     reg_exp_too_big_(false),
+    limiting_recursion_(false),
+    optimize_(true),
     read_backward_(false),
     current_expansion_factor_(1),
     frequency_collator_(),
@@ -454,8 +467,11 @@ RegExpCode RegExpCompiler::Assemble(JSContext* cx,
     macro_assembler_->BindBacktrack(&fail);
     macro_assembler_->Fail();
 
-    while (!work_list_.empty())
-        work_list_.popCopy()->Emit(this, &new_trace);
+    while (!work_list_.empty()) {
+        RegExpNode* node = work_list_.popCopy();
+        node->set_on_work_list(false);
+        if (!node->label()->bound()) node->Emit(this, &new_trace);
+    }
 
     RegExpCode code = macro_assembler_->GenerateCode(cx, match_only_);
     if (code.empty())
@@ -718,8 +734,13 @@ void Trace::Flush(RegExpCompiler* compiler, RegExpNode* successor) {
     // Create a new trivial state and generate the node with that.
     Label undo;
     assembler->PushBacktrack(&undo);
-    Trace new_state;
-    successor->Emit(compiler, &new_state);
+    if (successor->KeepRecursing(compiler)) {
+        Trace new_state;
+        successor->Emit(compiler, &new_state);
+    } else {
+        compiler->AddWork(successor);
+        assembler->JumpOrBacktrack(successor->label());
+    }
 
     // On backtrack we need to restore state.
     assembler->BindBacktrack(&undo);
@@ -1532,9 +1553,7 @@ static void EmitCharClass(RegExpMacroAssembler* macro_assembler,
                           Label* on_failure, int cp_offset, bool check_offset,
                           bool preloaded, LifoAlloc* zone) {
     CharacterRangeVector* ranges = cc->ranges(zone);
-    if (!CharacterRange::IsCanonical(ranges)) {
-        CharacterRange::Canonicalize(ranges);
-    }
+    CharacterRange::Canonicalize(ranges);
 
     int max_char;
     if (one_byte) {
@@ -1572,16 +1591,6 @@ static void EmitCharClass(RegExpMacroAssembler* macro_assembler,
             if (check_offset) {
                 macro_assembler->CheckPosition(cp_offset, on_failure);
             }
-        }
-        return;
-    }
-    // TODO(anba): Removed in https://github.com/v8/v8/commit/ea820ad5fa282a323a86fe20e64f83ee67ba5f04
-    if (last_valid_range == 0 &&
-        !cc->is_negated() &&
-        ranges->at(0).IsEverything(max_char)) {
-        // This is a common case hit by non-anchored expressions.
-        if (check_offset) {
-            macro_assembler->CheckPosition(cp_offset, on_failure);
         }
         return;
     }
@@ -1645,37 +1654,41 @@ RegExpNode::LimitResult RegExpNode::LimitVersions(RegExpCompiler* compiler,
 
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
     if (trace->is_trivial()) {
-        if (label()->bound()) {
-            // We are being asked to generate a generic version, but that's already
-            // been done so just go to it.
-            macro_assembler->JumpOrBacktrack(label());
-            return DONE;
-        }
-        if (compiler->recursion_depth() >= RegExpCompiler::kMaxRecursion) {
-            // To avoid too deep recursion we push the node to the work queue and just
-            // generate a goto here.
+        if (label_.bound() || on_work_list() || !KeepRecursing(compiler)) {
+            // If a generic version is already scheduled to be generated or we have
+            // recursed too deeply then just generate a jump to that code.
+            macro_assembler->JumpOrBacktrack(&label_);
+            // This will queue it up for generation of a generic version if it hasn't
+            // already been queued.
             compiler->AddWork(this);
-            macro_assembler->JumpOrBacktrack(label());
             return DONE;
         }
         // Generate generic version of the node and bind the label for later use.
-        macro_assembler->Bind(label());
+        macro_assembler->Bind(&label_);
         return CONTINUE;
     }
 
     // We are being asked to make a non-generic version.  Keep track of how many
     // non-generic versions we generate so as not to overdo it.
     trace_count_++;
-    if (trace_count_ < kMaxCopiesCodeGenerated &&
-        compiler->recursion_depth() <= RegExpCompiler::kMaxRecursion) {
+    if (KeepRecursing(compiler) && compiler->optimize() &&
+        trace_count_ < kMaxCopiesCodeGenerated) {
         return CONTINUE;
     }
 
     // If we get here code has been generated for this node too many times or
     // recursion is too deep.  Time to switch to a generic version.  The code for
     // generic versions above can handle deep recursion properly.
+    bool was_limiting = compiler->limiting_recursion();
+    compiler->set_limiting_recursion(true);
     trace->Flush(compiler, this);
+    compiler->set_limiting_recursion(was_limiting);
     return DONE;
+}
+
+bool RegExpNode::KeepRecursing(RegExpCompiler* compiler) {
+    return !compiler->limiting_recursion() &&
+           compiler->recursion_depth() <= RegExpCompiler::kMaxRecursion;
 }
 
 int ActionNode::EatsAtLeast(int still_to_find,
@@ -1942,21 +1955,17 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                 QuickCheckDetails::Position* pos =
                     details->positions(characters_filled_in);
                 uc16 c = quarks[i];
-                // TODO(anba): Apply https://github.com/v8/v8/commit/d96e688dc9b108d96d8edadb24892007b0d2224a
-                if (c > char_mask) {
-                    // If we expect a non-Latin1 character from an Latin1 string,
-                    // there is no way we can match. Not even case independent
-                    // matching can turn an Latin1 character into non-Latin1 or
-                    // vice versa.
-                    details->set_cannot_match();
-                    pos->determines_perfectly = false;
-                    return;
-                }
                 if (compiler->ignore_case()) {
                     unibrow::uchar chars[unibrow::Ecma262UnCanonicalize::kMaxWidth];
                     int length = GetCaseIndependentLetters(c,
                                                            compiler->one_byte(), chars);
-                    MOZ_ASSERT(length != 0);  // Can only happen if c > char_mask (see above).
+                    if (length == 0) {
+                        // This can happen because all case variants are non-Latin1, but we
+                        // know the input is Latin1.
+                        details->set_cannot_match();
+                        pos->determines_perfectly = false;
+                        return;
+                    }
                     if (length == 1) {
                         // This letter has no case equivalents, so it's nice and simple
                         // and the mask-compare will determine definitely whether we have
@@ -1987,6 +1996,11 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                     // Don't ignore case.  Nice simple case where the mask-compare will
                     // determine definitely whether we have a match at this character
                     // position.
+                    if (c > char_mask) {
+                        details->set_cannot_match();
+                        pos->determines_perfectly = false;
+                        return;
+                    }
                     pos->mask = char_mask;
                     pos->value = c;
                     pos->determines_perfectly = true;
@@ -2193,11 +2207,8 @@ RegExpNode* TextNode::FilterOneByte(int depth, bool ignore_case) {
         } else {
             DCHECK(elm.text_type() == TextElement::CHAR_CLASS);
             RegExpCharacterClass* cc = elm.char_class();
-
             CharacterRangeVector* ranges = cc->ranges(zone());
-            if (!CharacterRange::IsCanonical(ranges))
-                CharacterRange::Canonicalize(ranges);
-
+            CharacterRange::Canonicalize(ranges);
             // Now they are in order so we only need to look at the first.
             int range_count = ranges->length();
             if (cc->is_negated()) {
@@ -2829,8 +2840,7 @@ RegExpNode* TextNode::GetSuccessorOfOmnivorousTextNode(
     if (elm.text_type() != TextElement::CHAR_CLASS) return NULL;
     RegExpCharacterClass* node = elm.char_class();
     CharacterRangeVector* ranges = node->ranges(zone());
-    if (!CharacterRange::IsCanonical(ranges))
-        CharacterRange::Canonicalize(ranges);
+    CharacterRange::Canonicalize(ranges);
     if (node->is_negated()) {
         return ranges->length() == 0 ? on_success() : NULL;
     }
@@ -2885,6 +2895,7 @@ void LoopChoiceNode::AddContinueAlternative(GuardedAlternative alt) {
 void LoopChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
     if (trace->stop_node() == this) {
+        // Back edge of greedy optimized loop node graph.
         int text_length =
             GreedyLoopTextLengthForAlternative(&(alternatives()->at(0)));
         DCHECK(text_length != kNodeIsTooComplexForGreedyLoops);
@@ -4227,7 +4238,7 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
 
     if (body_can_be_empty) {
         body_start_reg = compiler->AllocateRegister();
-    } else if (!needs_capture_clearing) {
+    } else if (compiler->optimize() && !needs_capture_clearing) {
         // Only unroll if there are no captures and the body can't be
         // empty.
         {

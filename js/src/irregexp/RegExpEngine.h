@@ -256,7 +256,7 @@ class QuickCheckDetails {
 class RegExpNode {
   public:
     explicit RegExpNode(Zone* zone)
-      : replacement_(NULL), trace_count_(0), zone_(zone) {
+      : replacement_(NULL), on_work_list_(false), trace_count_(0), zone_(zone) {
       bm_info_[0] = bm_info_[1] = NULL;
     }
     virtual ~RegExpNode() {}
@@ -310,6 +310,7 @@ class RegExpNode {
     // EatsAtLeast, GetQuickCheckDetails.  The budget argument is used to limit
     // the number of nodes we are willing to look at in order to create this data.
     static const int kRecursionBudget = 200;
+    bool KeepRecursing(RegExpCompiler* compiler);
     virtual bool FillInBMInfo(int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start) {
         MOZ_CRASH("Bad call");
@@ -350,6 +351,9 @@ class RegExpNode {
     // the deferred actions in the current trace and generating a goto.
     static const int kMaxCopiesCodeGenerated = 10;
 
+    bool on_work_list() { return on_work_list_; }
+    void set_on_work_list(bool value) { on_work_list_ = value; }
+
     NodeInfo* info() { return &info_; }
 
     BoyerMooreLookahead* bm_info(bool not_at_start) {
@@ -371,6 +375,7 @@ class RegExpNode {
   private:
     static const int kFirstCharBudget = 10;
     jit::Label label_;
+    bool on_work_list_;
     NodeInfo info_;
 
     // This variable keeps track of how many times code has been generated for
