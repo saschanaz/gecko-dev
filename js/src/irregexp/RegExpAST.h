@@ -130,8 +130,8 @@ class CharacterRange {
     }
     static inline CharacterRange Range(uc32 from, uc32 to) {
         // TODO(anba): Enable/Fix assertions.
-        // MOZ_ASSERT(0 <= from && to <= unicode::NonBMPMax);
-        MOZ_ASSERT(static_cast<uint32_t>(from) <= static_cast<uint32_t>(to));
+        // DCHECK(0 <= from && to <= unicode::NonBMPMax);
+        DCHECK(static_cast<uint32_t>(from) <= static_cast<uint32_t>(to));
         return CharacterRange(from, to);
     }
     static inline CharacterRange Everything() {
@@ -229,12 +229,12 @@ class TextElement final {
     RegExpTree* tree() const { return tree_; }
 
     RegExpAtom* atom() const {
-        MOZ_ASSERT(text_type() == ATOM);
+        DCHECK(text_type() == ATOM);
         return reinterpret_cast<RegExpAtom*>(tree());
     }
 
     RegExpCharacterClass* char_class() const {
-        MOZ_ASSERT(text_type() == CHAR_CLASS);
+        DCHECK(text_type() == CHAR_CLASS);
         return reinterpret_cast<RegExpCharacterClass*>(tree());
     }
 

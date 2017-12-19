@@ -142,7 +142,7 @@ bool RegExpCapture::IsAnchoredAtEnd() { return body()->IsAnchoredAtEnd(); }
 
 RegExpDisjunction::RegExpDisjunction(RegExpTreeVector* alternatives)
   : alternatives_(alternatives) {
-    MOZ_ASSERT(alternatives->length() > 1);
+    DCHECK(alternatives->length() > 1);
     RegExpTree* first_alternative = alternatives->at(0);
     min_match_ = first_alternative->min_match();
     max_match_ = first_alternative->max_match();
@@ -163,7 +163,7 @@ static int IncreaseBy(int previous, int increase) {
 
 RegExpAlternative::RegExpAlternative(RegExpTreeVector* nodes)
   : nodes_(nodes) {
-    MOZ_ASSERT(nodes->length() > 1);
+    DCHECK(nodes->length() > 1);
     min_match_ = 0;
     max_match_ = 0;
     for (size_t i = 0; i < nodes->length(); i++) {

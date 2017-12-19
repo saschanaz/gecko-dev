@@ -103,14 +103,14 @@ class MOZ_STACK_CLASS RegExpStackCursor
 static int32_t
 Load32Aligned(const uint8_t* pc)
 {
-    MOZ_ASSERT((reinterpret_cast<uintptr_t>(pc) & 3) == 0);
+    DCHECK((reinterpret_cast<uintptr_t>(pc) & 3) == 0);
     return *reinterpret_cast<const int32_t*>(pc);
 }
 
 static int32_t
 Load16Aligned(const uint8_t* pc)
 {
-    MOZ_ASSERT((reinterpret_cast<uintptr_t>(pc) & 1) == 0);
+    DCHECK((reinterpret_cast<uintptr_t>(pc) & 1) == 0);
     return *reinterpret_cast<const uint16_t*>(pc);
 }
 

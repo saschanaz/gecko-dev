@@ -39,6 +39,17 @@
 namespace js {
 namespace irregexp {
 
+#define DCHECK(...) MOZ_ASSERT(__VA_ARGS__)
+#define DCHECK_EQ(val1, val2) MOZ_ASSERT((val1) == (val2))
+#define DCHECK_NE(val1, val2) MOZ_ASSERT((val1) != (val2))
+#define DCHECK_LT(val1, val2) MOZ_ASSERT((val1) <  (val2))
+#define DCHECK_LE(val1, val2) MOZ_ASSERT((val1) <= (val2))
+#define DCHECK_GT(val1, val2) MOZ_ASSERT((val1) >  (val2))
+#define DCHECK_GE(val1, val2) MOZ_ASSERT((val1) >= (val2))
+#define DCHECK_IMPLIES(...) MOZ_ASSERT_IF(__VA_ARGS__)
+#define DCHECK_NULL(expr) MOZ_ASSERT((expr) == nullptr)
+#define DCHECK_NOT_NULL(expr) MOZ_ASSERT((expr) != nullptr)
+
 // TODO(anba): Decide on types.
 using uc16 = char16_t;
 using uc32 = char16_t;

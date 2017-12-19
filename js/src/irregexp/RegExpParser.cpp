@@ -772,13 +772,13 @@ RegExpParser<CharT>::ParseDisjunction()
                 // Inside a parenthesized group when hitting end of input.
                 return ReportError(JSMSG_MISSING_PAREN);
             }
-            MOZ_ASSERT(INITIAL == stored_state->group_type());
+            DCHECK_EQ(INITIAL, stored_state->group_type());
             // Parsing completed successfully.
             return builder->ToRegExp();
           case ')': {
             if (!stored_state->IsSubexpression())
                 return ReportError(JSMSG_UNMATCHED_RIGHT_PAREN);
-            MOZ_ASSERT(INITIAL != stored_state->group_type());
+            DCHECK_NE(INITIAL, stored_state->group_type());
 
             Advance();
             // End disjunction parsing and convert builder content to new single
@@ -800,8 +800,8 @@ RegExpParser<CharT>::ParseDisjunction()
                 (*captures_)[capture_index - 1] = capture;
                 body = capture;
             } else if (group_type != GROUPING) {
-                MOZ_ASSERT(group_type == POSITIVE_LOOKAHEAD ||
-                           group_type == NEGATIVE_LOOKAHEAD);
+                DCHECK(group_type == POSITIVE_LOOKAHEAD ||
+                       group_type == NEGATIVE_LOOKAHEAD);
                 bool is_positive = (group_type == POSITIVE_LOOKAHEAD);
                 body = alloc->newInfallible<RegExpLookahead>(body,
                                                    is_positive,
@@ -1224,8 +1224,8 @@ template <typename CharT>
 bool
 RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out)
 {
-    MOZ_ASSERT('\\' == current());
-    MOZ_ASSERT('1' <= Next() && Next() <= '9');
+    DCHECK_EQ('\\', current());
+    DCHECK('1' <= Next() && Next() <= '9');
 
     // Try to parse a decimal literal that is no greater than the total number
     // of left capturing parentheses in the input.
@@ -1271,7 +1271,7 @@ template <typename CharT>
 bool
 RegExpParser<CharT>::ParseIntervalQuantifier(int* min_out, int* max_out)
 {
-    MOZ_ASSERT(current() == '{');
+    DCHECK_EQ(current(), '{');
     const CharT* start = position();
     Advance();
     int min = 0;
@@ -1333,7 +1333,7 @@ template <typename CharT>
 widechar
 RegExpParser<CharT>::ParseOctalLiteral()
 {
-    MOZ_ASSERT('0' <= current() && current() <= '7');
+    DCHECK('0' <= current() && current() <= '7');
     // For compatibility with some other browsers (not all), we parse
     // up to three octal digits with a value below 256.
     widechar value = current() - '0';
@@ -1389,8 +1389,8 @@ template <typename CharT>
 bool
 RegExpParser<CharT>::ParseClassCharacterEscape(widechar* code)
 {
-    MOZ_ASSERT(current() == '\\');
-    MOZ_ASSERT(has_next() && !IsSpecialClassEscape(Next()));
+    DCHECK(current() == '\\');
+    DCHECK(has_next() && !IsSpecialClassEscape(Next()));
     Advance();
     switch (current()) {
       case 'b':
@@ -1535,7 +1535,7 @@ template <typename CharT>
 RegExpTree*
 RegExpParser<CharT>::ParseCharacterClass()
 {
-    MOZ_ASSERT(current() == '[');
+    DCHECK_EQ(current(), '[');
     Advance();
     bool is_negated = false;
     if (current() == '^') {
@@ -1859,7 +1859,7 @@ RegExpBuilder::AddQuantifierToAtom(int min, int max,
     }
     RegExpTree* atom;
     if (characters_ != nullptr) {
-        MOZ_ASSERT(last_added_ == ADD_CHAR);
+        DCHECK(last_added_ == ADD_CHAR);
         // Last atom was character.
         CharacterVector* char_vector = characters_;
         int num_chars = char_vector->length();
@@ -1874,11 +1874,11 @@ RegExpBuilder::AddQuantifierToAtom(int min, int max,
         atom = alloc->newInfallible<RegExpAtom>(char_vector);
         FlushText();
     } else if (text_.length() > 0) {
-        MOZ_ASSERT(last_added_ == ADD_ATOM);
+        DCHECK(last_added_ == ADD_ATOM);
         atom = text_.RemoveLast();
         FlushText();
     } else if (terms_.length() > 0) {
-        MOZ_ASSERT(last_added_ == ADD_ATOM);
+        DCHECK(last_added_ == ADD_ATOM);
         atom = terms_.RemoveLast();
         if (atom->max_match() == 0) {
             // Guaranteed to only match an empty string.
