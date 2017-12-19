@@ -4694,6 +4694,14 @@ ConvertRegExpTreeToObject(JSContext* cx, irregexp::RegExpTree* tree)
             return nullptr;
         return obj;
     }
+    if (tree->IsGroup()) {
+        if (!StringProp(cx, obj, "type", "Group"))
+            return nullptr;
+        irregexp::RegExpGroup* t = tree->AsGroup();
+        if (!TreeProp(cx, obj, "body", t->body()))
+            return nullptr;
+        return obj;
+    }
 
     MOZ_CRASH("unexpected RegExpTree type");
 }

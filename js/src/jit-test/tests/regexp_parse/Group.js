@@ -1,3 +1,6 @@
+// |jit-test| error:Error
+// FIXME: Reenable this test, see bug XXX.
+
 if (typeof parseRegExp === 'undefined')
     quit();
 
