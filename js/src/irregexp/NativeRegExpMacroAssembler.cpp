@@ -320,7 +320,7 @@ NativeRegExpMacroAssembler::GenerateCode(JSContext* cx, bool match_only)
                 masm.addPtr(inputByteLength, temp0);
 
                 // Convert byte index to character index.
-                if (mode_ == CHAR16)
+                if (mode_ == UC16)
                     masm.rshiftPtrArithmetic(Imm32(1), temp0);
 
                 masm.store32(temp0, Address(outputRegisters, i * sizeof(int32_t)));
@@ -386,7 +386,7 @@ NativeRegExpMacroAssembler::GenerateCode(JSContext* cx, bool match_only)
                 masm.addPtr(inputByteLength, temp0);
 
                 // Convert byte index to character index.
-                if (mode_ == CHAR16)
+                if (mode_ == UC16)
                     masm.rshiftPtrArithmetic(Imm32(1), temp0);
 
                 masm.store32(temp0, Address(endIndexRegister, 0));
@@ -748,7 +748,7 @@ NativeRegExpMacroAssembler::CheckNotBackReference(int start_reg, bool read_backw
         masm.load8ZeroExtend(Address(current_character, 0), temp0);
         masm.load8ZeroExtend(Address(temp1, 0), temp2);
     } else {
-        MOZ_ASSERT(mode_ == CHAR16);
+        MOZ_ASSERT(mode_ == UC16);
         masm.load16ZeroExtend(Address(current_character, 0), temp0);
         masm.load16ZeroExtend(Address(temp1, 0), temp2);
     }
@@ -876,7 +876,7 @@ NativeRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(int start_reg,
         // Compute new value of character position after the matched part.
         masm.subPtr(input_end_pointer, current_position);
     } else {
-        MOZ_ASSERT(mode_ == CHAR16);
+        MOZ_ASSERT(mode_ == UC16);
 
         // Note: temp1 needs to be saved/restored if it is volatile, as it is used after the call.
         LiveGeneralRegisterSet volatileRegs(GeneralRegisterSet::Volatile());
@@ -1047,7 +1047,7 @@ NativeRegExpMacroAssembler::LoadCurrentCharacterUnchecked(int cp_offset, int cha
             masm.load8ZeroExtend(address, current_character);
         }
     } else {
-        MOZ_ASSERT(mode_ == CHAR16);
+        MOZ_ASSERT(mode_ == UC16);
         MOZ_ASSERT(characters <= 2);
         BaseIndex address(input_end_pointer, current_position, TimesOne, cp_offset * sizeof(char16_t));
         if (characters == 2)
@@ -1348,7 +1348,7 @@ NativeRegExpMacroAssembler::CheckSpecialCharacterClass(uc16 type, Label* on_no_m
         // See if current character is '\n'^1 or '\r'^1, i.e., 0x0b or 0x0c
         masm.sub32(Imm32(0x0b), temp0);
         masm.branch32(Assembler::BelowOrEqual, temp0, Imm32(0x0c - 0x0b), branch);
-        if (mode_ == CHAR16) {
+        if (mode_ == UC16) {
             // Compare original value to 0x2028 and 0x2029, using the already
             // computed (current_char ^ 0x01 - 0x0b). I.e., check for
             // 0x201d (0x2028 - 0x0b) or 0x201e.
@@ -1400,7 +1400,7 @@ NativeRegExpMacroAssembler::CheckSpecialCharacterClass(uc16 type, Label* on_no_m
         } else {
             Label done;
             masm.branch32(Assembler::BelowOrEqual, temp0, Imm32(0x0c - 0x0b), &done);
-            MOZ_ASSERT(CHAR16 == mode_);
+            MOZ_ASSERT(UC16 == mode_);
 
             // Compare original value to 0x2028 and 0x2029, using the already
             // computed (current_char ^ 0x01 - 0x0b). I.e., check for

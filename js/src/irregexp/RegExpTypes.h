@@ -31,6 +31,8 @@
 #ifndef V8_REGEXP_TYPES_H_
 #define V8_REGEXP_TYPES_H_
 
+#include "mozilla/EnumSet.h"
+
 #include "jstypes.h"
 
 #include "ds/LifoAlloc.h"
@@ -74,6 +76,19 @@ namespace String {
     constexpr uint32_t kMaxOneByteCharCodeU = 0xff;
     constexpr int32_t kMaxUtf16CodeUnit = 0xffff;
     constexpr int32_t kMaxCodePoint = 0x10ffff;
+}
+
+namespace JSRegExp {
+    enum Flag {
+        kNone = 0,
+        kGlobal = 1 << 0,
+        kIgnoreCase = 1 << 1,
+        kMultiline = 1 << 2,
+        kSticky = 1 << 3,
+        kUnicode = 1 << 4,
+        kDotAll = 1 << 5,
+    };
+    using Flags = mozilla::EnumSet<Flag>;
 }
 
 namespace unibrow {
@@ -127,6 +142,7 @@ class InfallibleVector
     const T& operator[](size_t index) const { return vector_[index]; }
 
     // Alternative accessors to match V8's Vector API.
+    void Add(const T& t) { MOZ_ALWAYS_TRUE(vector_.append(t)); }
     T& at(size_t index) { return vector_[index]; }
     const T& at(size_t index) const { return vector_[index]; }
 

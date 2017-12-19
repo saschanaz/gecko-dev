@@ -55,11 +55,41 @@ class RegExpNode;
 class RegExpTree;
 class BoyerMooreLookahead;
 
+inline bool IgnoreCase(JSRegExp::Flags flags) {
+  return flags.contains(JSRegExp::kIgnoreCase);
+}
+
+inline bool IsUnicode(JSRegExp::Flags flags) {
+  return flags.contains(JSRegExp::kUnicode);
+}
+
+inline bool IsSticky(JSRegExp::Flags flags) {
+  return flags.contains(JSRegExp::kSticky);
+}
+
+inline bool IsGlobal(JSRegExp::Flags flags) {
+  return flags.contains(JSRegExp::kGlobal);
+}
+
+inline bool DotAll(JSRegExp::Flags flags) {
+  return flags.contains(JSRegExp::kDotAll);
+}
+
+inline bool Multiline(JSRegExp::Flags flags) {
+  return flags.contains(JSRegExp::kMultiline);
+}
+
+inline bool NeedsUnicodeCaseEquivalents(JSRegExp::Flags flags) {
+  // Both unicode and ignore_case flags are set. We need to use ICU to find
+  // the closure over case equivalents.
+  return IsUnicode(flags) && IgnoreCase(flags);
+}
+
 // A set of unsigned integers that behaves especially well on small
 // integers (< 32).  May do zone-allocation.
 class OutSet {
   public:
-    OutSet() : first_(0), remaining_(NULL), successors_(NULL) {}
+    OutSet() : first_(0), remaining_(nullptr), successors_(nullptr) {}
     OutSet* Extend(unsigned value, Zone* zone);
     bool Get(unsigned value) const;
     static const unsigned kFirstLimit = 32;
@@ -79,7 +109,7 @@ class OutSet {
     OutSetVector* successors(Zone* zone) { return successors_; }
 
     OutSet(uint32_t first, RemainingVector* remaining)
-      : first_(first), remaining_(remaining), successors_(NULL) {}
+      : first_(first), remaining_(remaining), successors_(nullptr) {}
 
     const RemainingVector& remaining() const { return *remaining_; }
     RemainingVector& remaining() { return *remaining_; }
@@ -230,8 +260,8 @@ class QuickCheckDetails {
     void set_characters(int characters) { characters_ = characters; }
 
     Position* positions(int index) {
-        DCHECK(index >= 0);
-        DCHECK(index < characters_);
+        DCHECK_LE(0, index);
+        DCHECK_GT(characters_, index);
         return positions_ + index;
     }
 
@@ -258,8 +288,11 @@ extern int kUninitializedRegExpNodePlaceHolder;
 class RegExpNode {
   public:
     explicit RegExpNode(Zone* zone)
-      : replacement_(NULL), on_work_list_(false), trace_count_(0), zone_(zone) {
-      bm_info_[0] = bm_info_[1] = NULL;
+        : replacement_(nullptr),
+          on_work_list_(false),
+          trace_count_(0),
+          zone_(zone) {
+      bm_info_[0] = bm_info_[1] = nullptr;
     }
     virtual ~RegExpNode() {}
     virtual void Accept(NodeVisitor* visitor) = 0;
@@ -304,7 +337,7 @@ class RegExpNode {
     // character and that has no guards on it.
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
             RegExpCompiler* compiler) {
-        return NULL;
+        return nullptr;
     }
 
     // Collects information on the possible code units (mod 128) that can match if
@@ -321,10 +354,8 @@ class RegExpNode {
 
     // If we know that the input is one-byte then there are some nodes that can
     // never match.  This method returns a node that can be substituted for
-    // itself, or NULL if the node can never match.
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case) {
-        return this;
-    }
+    // itself, or nullptr if the node can never match.
+    virtual RegExpNode* FilterOneByte(int depth) { return this; }
 
     // Helper for FilterOneByte.
     RegExpNode* replacement() {
@@ -399,12 +430,12 @@ class SeqRegExpNode : public RegExpNode {
 
     RegExpNode* on_success() { return on_success_; }
     void set_on_success(RegExpNode* node) { on_success_ = node; }
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
+    virtual RegExpNode* FilterOneByte(int depth);
     virtual bool FillInBMInfo(int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start);
 
   protected:
-    RegExpNode* FilterSuccessor(int depth, bool ignore_case);
+    RegExpNode* FilterSuccessor(int depth);
 
   private:
     RegExpNode* on_success_;
@@ -511,13 +542,15 @@ class TextNode : public SeqRegExpNode {
     static TextNode* CreateForCharacterRanges(Zone* zone,
                                               CharacterRangeVector* ranges,
                                               bool read_backward,
-                                              RegExpNode* on_success);
+                                              RegExpNode* on_success,
+                                              JSRegExp::Flags flags);
     // Create TextNode for a surrogate pair with a range given for the
     // lead and the trail surrogate each.
     static TextNode* CreateForSurrogatePair(Zone* zone, CharacterRange lead,
                                             CharacterRange trail,
                                             bool read_backward,
-                                            RegExpNode* on_success);
+                                            RegExpNode* on_success,
+                                            JSRegExp::Flags flags);
 
     virtual void Accept(NodeVisitor* visitor);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
@@ -535,7 +568,7 @@ class TextNode : public SeqRegExpNode {
     virtual bool FillInBMInfo(int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start);
     void CalculateOffsets();
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
+    virtual RegExpNode* FilterOneByte(int depth);
 
   private:
     enum TextEmitPassType {
@@ -545,7 +578,7 @@ class TextNode : public SeqRegExpNode {
         CASE_CHARACTER_MATCH,        // Case-independent single character check.
         CHARACTER_CLASS_MATCH        // Character class.
     };
-    static bool SkipPass(int pass, bool ignore_case);
+    static bool SkipPass(TextEmitPassType pass, bool ignore_case);
     static const int kFirstRealPass = SIMPLE_CHARACTER_MATCH;
     static const int kLastPass = CHARACTER_CLASS_MATCH;
     void TextEmitPass(RegExpCompiler* compiler,
@@ -609,11 +642,12 @@ class AssertionNode : public SeqRegExpNode {
 
 class BackReferenceNode : public SeqRegExpNode {
   public:
-    BackReferenceNode(int start_reg, int end_reg, bool read_backward,
-                      RegExpNode* on_success)
+    BackReferenceNode(int start_reg, int end_reg, JSRegExp::Flags flags,
+                      bool read_backward, RegExpNode* on_success)
       : SeqRegExpNode(on_success),
         start_reg_(start_reg),
         end_reg_(end_reg),
+        flags_(flags),
         read_backward_(read_backward) {}
 
     virtual void Accept(NodeVisitor* visitor);
@@ -636,6 +670,7 @@ class BackReferenceNode : public SeqRegExpNode {
   private:
     int start_reg_;
     int end_reg_;
+    JSRegExp::Flags flags_;
     bool read_backward_;
 };
 
@@ -711,7 +746,8 @@ typedef InfallibleVector<Guard*, 1> GuardVector;
 
 class GuardedAlternative {
   public:
-    explicit GuardedAlternative(RegExpNode* node) : node_(node), guards_(NULL) { }
+    explicit GuardedAlternative(RegExpNode* node)
+        : node_(node), guards_(nullptr) { }
     void AddGuard(Guard* guard, Zone* zone);
     RegExpNode* node() { return node_; }
     void set_node(RegExpNode* node) { node_ = node; }
@@ -760,7 +796,7 @@ class ChoiceNode : public RegExpNode {
     virtual bool try_to_emit_quick_check_for_alternative(bool is_first) {
         return true;
     }
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
+    virtual RegExpNode* FilterOneByte(int depth);
     virtual bool read_backward() { return false; }
 
   protected:
@@ -827,15 +863,15 @@ class NegativeLookaroundChoiceNode : public ChoiceNode {
     virtual bool try_to_emit_quick_check_for_alternative(bool is_first) {
         return !is_first;
     }
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
+    virtual RegExpNode* FilterOneByte(int depth);
 };
 
 class LoopChoiceNode : public ChoiceNode {
   public:
     LoopChoiceNode(bool body_can_be_zero_length, bool read_backward, Zone* zone)
       : ChoiceNode(2, zone),
-        loop_node_(NULL),
-        continue_node_(NULL),
+        loop_node_(nullptr),
+        continue_node_(nullptr),
         body_can_be_zero_length_(body_can_be_zero_length),
         read_backward_(read_backward) {}
 
@@ -854,7 +890,7 @@ class LoopChoiceNode : public ChoiceNode {
     bool body_can_be_zero_length() { return body_can_be_zero_length_; }
     virtual bool read_backward() { return read_backward_; }
     virtual void Accept(NodeVisitor* visitor);
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
+    virtual RegExpNode* FilterOneByte(int depth);
 
   private:
     // AddAlternative is made private for loop nodes because alternatives
@@ -1033,7 +1069,7 @@ class Trace {
     class DeferredAction {
       public:
         DeferredAction(ActionNode::ActionType action_type, int reg)
-          : action_type_(action_type), reg_(reg), next_(NULL) { }
+          : action_type_(action_type), reg_(reg), next_(nullptr) {}
 
         DeferredAction* next() { return next_; }
         bool Mentions(int reg);
@@ -1090,10 +1126,10 @@ class Trace {
 
     Trace()
       : cp_offset_(0),
-        actions_(NULL),
-        backtrack_(NULL),
-        stop_node_(NULL),
-        loop_label_(NULL),
+        actions_(nullptr),
+        backtrack_(nullptr),
+        stop_node_(nullptr),
+        loop_label_(nullptr),
         characters_preloaded_(0),
         bound_checked_up_to_(0),
         flush_budget_(100),
@@ -1119,13 +1155,9 @@ class Trace {
     // a trivial trace is recorded in a label in the node so that gotos can be
     // generated to that code.
     bool is_trivial() {
-        return backtrack_ == NULL &&
-               actions_ == NULL &&
-               cp_offset_ == 0 &&
-               characters_preloaded_ == 0 &&
-               bound_checked_up_to_ == 0 &&
-               quick_check_performed_.characters() == 0 &&
-               at_start_ == UNKNOWN;
+        return backtrack_ == nullptr && actions_ == nullptr && cp_offset_ == 0 &&
+               characters_preloaded_ == 0 && bound_checked_up_to_ == 0 &&
+               quick_check_performed_.characters() == 0 && at_start_ == UNKNOWN;
     }
 
     TriBool at_start() { return at_start_; }
@@ -1147,7 +1179,7 @@ class Trace {
     // These set methods and AdvanceCurrentPositionInTrace should be used only on
     // new traces - the intention is that traces are immutable after creation.
     void add_action(DeferredAction* new_action) {
-        DCHECK(new_action->next_ == NULL);
+        DCHECK(new_action->next_ == nullptr);
         new_action->next_ = actions_;
         actions_ = new_action;
     }
@@ -1236,12 +1268,8 @@ class NodeVisitor {
 //   +-------+        +------------+
 class Analysis : public NodeVisitor {
   public:
-    Analysis(JSContext* cx, bool ignore_case, bool unicode, bool is_one_byte)
-      : cx(cx),
-        ignore_case_(ignore_case),
-        unicode_(unicode),
-        is_one_byte_(is_one_byte),
-        error_message_(NULL) {}
+    Analysis(JSContext* cx, bool is_one_byte)
+      : cx(cx), is_one_byte_(is_one_byte), error_message_(nullptr) {}
 
     void EnsureAnalyzed(RegExpNode* node);
 
@@ -1251,22 +1279,17 @@ class Analysis : public NodeVisitor {
 #undef DECLARE_VISIT
     virtual void VisitLoopChoice(LoopChoiceNode* that);
 
-    bool has_failed() { return error_message_ != NULL; }
+    bool has_failed() { return error_message_ != nullptr; }
     const char* error_message() {
-        DCHECK(error_message_ != NULL);
+        DCHECK(error_message_ != nullptr);
         return error_message_;
     }
     void fail(const char* error_message) {
         error_message_ = error_message;
     }
 
-    bool ignore_case() const { return ignore_case_; }
-    bool unicode() const { return unicode_; }
-
   private:
     JSContext* cx;
-    bool ignore_case_;
-    bool unicode_;
     bool is_one_byte_;
     const char* error_message_;
 
@@ -1275,7 +1298,7 @@ class Analysis : public NodeVisitor {
 
 struct RegExpCompileData {
     RegExpCompileData()
-      : tree(NULL),
+      : tree(nullptr),
         simple(true),
         contains_anchor(false),
         capture_count(0) {}

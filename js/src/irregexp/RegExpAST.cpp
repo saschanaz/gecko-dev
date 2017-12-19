@@ -41,7 +41,7 @@ FOR_EACH_REG_EXP_TREE_TYPE(MAKE_ACCEPT)
 #undef MAKE_ACCEPT
 
 #define MAKE_TYPE_CASE(Name)                                         \
-  RegExp##Name* RegExpTree::As##Name() { return NULL; }              \
+  RegExp##Name* RegExpTree::As##Name() { return nullptr; }           \
   bool RegExpTree::Is##Name() { return false; }
 FOR_EACH_REG_EXP_TREE_TYPE(MAKE_TYPE_CASE)
 #undef MAKE_TYPE_CASE
@@ -142,7 +142,7 @@ bool RegExpCapture::IsAnchoredAtEnd() { return body()->IsAnchoredAtEnd(); }
 
 RegExpDisjunction::RegExpDisjunction(RegExpTreeVector* alternatives)
   : alternatives_(alternatives) {
-    DCHECK(alternatives->length() > 1);
+    DCHECK_LT(1, alternatives->length());
     RegExpTree* first_alternative = alternatives->at(0);
     min_match_ = first_alternative->min_match();
     max_match_ = first_alternative->max_match();
@@ -163,7 +163,7 @@ static int IncreaseBy(int previous, int increase) {
 
 RegExpAlternative::RegExpAlternative(RegExpTreeVector* nodes)
   : nodes_(nodes) {
-    DCHECK(nodes->length() > 1);
+    DCHECK_LT(1, nodes->length());
     min_match_ = 0;
     max_match_ = 0;
     for (int i = 0; i < nodes->length(); i++) {

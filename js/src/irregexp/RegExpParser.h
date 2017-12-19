@@ -65,20 +65,20 @@ ParsePatternSyntax(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc,
 // a single element. The last element added is stored outside the backing list,
 // and if no more than one element is ever added, the ZoneList isn't even
 // allocated.
-// Elements must not be NULL pointers.
+// Elements must not be nullptr pointers.
 template <typename T, int initial_size>
 class BufferedVector {
   public:
     typedef InfallibleVector<T*, 1> VectorType;
 
-    BufferedVector() : list_(NULL), last_(NULL) {}
+    BufferedVector() : list_(nullptr), last_(nullptr) {}
 
     // Adds element at end of list. This element is buffered and can
     // be read using last() or removed using RemoveLast until a new Add or until
     // RemoveLast or GetList has been called.
     void Add(T* value, Zone* zone) {
-        if (last_ != NULL) {
-            if (list_ == NULL) {
+        if (last_ != nullptr) {
+            if (list_ == nullptr) {
                 list_ = zone->newInfallible<VectorType>(*zone);
                 list_->reserve(initial_size);
             }
@@ -88,28 +88,28 @@ class BufferedVector {
     }
 
     T* last() {
-        DCHECK(last_ != NULL);
+        DCHECK(last_ != nullptr);
         return last_;
     }
 
     T* RemoveLast() {
-        DCHECK(last_ != NULL);
+        DCHECK(last_ != nullptr);
         T* result = last_;
-        if ((list_ != NULL) && (list_->length() > 0))
+        if ((list_ != nullptr) && (list_->length() > 0))
             last_ = list_->popCopy();
         else
-            last_ = NULL;
+            last_ = nullptr;
         return result;
     }
 
     T* Get(int i) {
         DCHECK((0 <= i) && (i < length()));
-        if (list_ == NULL) {
+        if (list_ == nullptr) {
             DCHECK_EQ(0, i);
             return last_;
         } else {
             if (i == list_->length()) {
-                DCHECK(last_ != NULL);
+                DCHECK(last_ != nullptr);
                 return last_;
             } else {
                 return list_->at(i);
@@ -118,22 +118,22 @@ class BufferedVector {
     }
 
     void Clear() {
-        list_ = NULL;
-        last_ = NULL;
+        list_ = nullptr;
+        last_ = nullptr;
     }
 
     int length() {
-        int length = (list_ == NULL) ? 0 : list_->length();
-        return length + ((last_ == NULL) ? 0 : 1);
+        int length = (list_ == nullptr) ? 0 : list_->length();
+        return length + ((last_ == nullptr) ? 0 : 1);
     }
 
     VectorType* GetList(Zone* zone) {
-        if (list_ == NULL) {
+        if (list_ == nullptr) {
             list_ = zone->newInfallible<VectorType>(*zone);
         }
-        if (last_ != NULL) {
+        if (last_ != nullptr) {
             list_->append(last_);
-            last_ = NULL;
+            last_ = nullptr;
         }
         return list_;
     }
@@ -147,7 +147,7 @@ class BufferedVector {
 // Accumulates RegExp atoms and assertions into lists of terms and alternatives.
 class RegExpBuilder {
   public:
-    RegExpBuilder(Zone* zone, bool ignore_case, bool unicode);
+    RegExpBuilder(Zone* zone, JSRegExp::Flags flags);
     void AddCharacter(uc16 character);
     void AddUnicodeCharacter(uc32 character);
     void AddEscapedUnicodeCharacter(uc32 character);
@@ -162,7 +162,14 @@ class RegExpBuilder {
     void NewAlternative();  // '|'
     bool AddQuantifierToAtom(int min, int max,
                              RegExpQuantifier::QuantifierType type);
+    void FlushText();
     RegExpTree* ToRegExp();
+    JSRegExp::Flags flags() const { return flags_; }
+    void set_flags(JSRegExp::Flags flags) { flags_ = flags; }
+
+    bool ignore_case() const { return flags_.contains(JSRegExp::kIgnoreCase); }
+    bool multiline() const { return flags_.contains(JSRegExp::kMultiline); }
+    bool dotall() const { return flags_.contains(JSRegExp::kDotAll); }
 
   private:
     static const uc16 kNoPendingSurrogate = 0;
@@ -170,18 +177,15 @@ class RegExpBuilder {
     void AddTrailSurrogate(uc16 trail_surrogate);
     void FlushPendingSurrogate();
     void FlushCharacters();
-    void FlushText();
     void FlushTerms();
     bool NeedsDesugaringForUnicode(RegExpCharacterClass* cc);
     bool NeedsDesugaringForIgnoreCase(uc32 c);
     Zone* zone() const { return zone_; }
-    bool ignore_case() const { return ignore_case_; }
-    bool unicode() const { return unicode_; }
+    bool unicode() const { return flags_.contains(JSRegExp::kUnicode); }
 
     Zone* zone_;
     bool pending_empty_;
-    bool ignore_case_;
-    bool unicode_;
+    JSRegExp::Flags flags_;
     CharacterVector* characters_;
     uc16 pending_surrogate_;
     BufferedVector<RegExpTree, 2> terms_;
@@ -197,13 +201,12 @@ template <typename CharT>
 class RegExpParser {
   public:
     RegExpParser(frontend::TokenStreamAnyChars& ts, Zone* zone,
-                 const CharT* chars, const CharT* end, bool multiline, bool unicode,
-                 bool ignore_case);
+                 const CharT* chars, const CharT* end,
+                 JSRegExp::Flags flags);
 
     RegExpTree* ParsePattern();
     RegExpTree* ParseDisjunction();
     RegExpTree* ParseGroup();
-    RegExpTree* ParseCharacterClass();
 
     // Parses a {...,...} quantifier and stores the range in the given
     // out parameters.
@@ -220,6 +223,7 @@ class RegExpParser {
     bool ParseHexEscape(int length, uc32* value);
     bool ParseUnicodeEscape(uc32* value, bool* parsed);
     bool ParseUnlimitedLengthHexNumber(int max_value, uc32* value);
+    RegExpTree* ParseCharacterClass();
 
     uc32 ParseOctalLiteral();
 
@@ -254,9 +258,9 @@ class RegExpParser {
     void set_contains_anchor() { contains_anchor_ = true; }
     int captures_started() { return captures_started_; }
     const CharT* position() { return next_pos_ - 1; }
-    bool ignore_case() const { return ignore_case_; }
-    bool multiline() const { return multiline_; }
-    bool unicode() const { return unicode_; }
+    // The Unicode flag can't be changed using in-regexp syntax, so it's OK to
+    // just read the initial flag value here.
+    bool unicode() const { return top_level_flags_.contains(JSRegExp::kUnicode); }
 
     static bool IsSyntaxCharacterOrSlash(uc32 c);
 
@@ -278,46 +282,47 @@ class RegExpParser {
                           SubexpressionType group_type,
                           RegExpLookaround::Type lookaround_type,
                           int disjunction_capture_index,
-                          bool ignore_case,
-                          bool unicode, Zone* zone)
+                          JSRegExp::Flags flags, Zone* zone)
             : previous_state_(previous_state),
-              builder_(zone->newInfallible<RegExpBuilder>(zone, ignore_case, unicode)),
+              builder_(zone->newInfallible<RegExpBuilder>(zone, flags)),
               group_type_(group_type),
               lookaround_type_(lookaround_type),
               disjunction_capture_index_(disjunction_capture_index)
         {}
         // Parser state of containing expression, if any.
-        RegExpParserState* previous_state() { return previous_state_; }
-        bool IsSubexpression() { return previous_state_ != NULL; }
+        RegExpParserState* previous_state() const { return previous_state_; }
+        bool IsSubexpression() { return previous_state_ != nullptr; }
         // RegExpBuilder building this regexp's AST.
-        RegExpBuilder* builder() { return builder_; }
+        RegExpBuilder* builder() const { return builder_; }
         // Type of regexp being parsed (parenthesized group or entire regexp).
-        SubexpressionType group_type() { return group_type_; }
+        SubexpressionType group_type() const { return group_type_; }
         // Lookahead or Lookbehind.
-        RegExpLookaround::Type lookaround_type() { return lookaround_type_; }
+        RegExpLookaround::Type lookaround_type() const { return lookaround_type_; }
         // Index in captures array of first capture in this sub-expression, if any.
         // Also the capture index of this sub-expression itself, if group_type
         // is CAPTURE.
-        int capture_index() { return disjunction_capture_index_; }
+        int capture_index() const { return disjunction_capture_index_; }
 
         // Check whether the parser is inside a capture group with the given index.
         bool IsInsideCaptureGroup(int index);
 
       private:
         // Linked list implementation of stack of states.
-        RegExpParserState* previous_state_;
+        RegExpParserState* const previous_state_;
         // Builder for the stored disjunction.
-        RegExpBuilder* builder_;
+        RegExpBuilder* const builder_;
         // Stored disjunction type (capture, look-ahead or grouping), if any.
-        SubexpressionType group_type_;
+        const SubexpressionType group_type_;
         // Stored read direction.
-        RegExpLookaround::Type lookaround_type_;
+        const RegExpLookaround::Type lookaround_type_;
         // Stored disjunction's capture index (if any).
-        int disjunction_capture_index_;
+        const int disjunction_capture_index_;
     };
 
     // Return the 1-indexed RegExpCapture object, allocate if necessary.
     RegExpCapture* GetCapture(int index);
+
+    RegExpParserState* ParseOpenParenthesis(RegExpParserState* state);
 
     Zone* zone() const { return zone_; }
 
@@ -336,9 +341,10 @@ class RegExpParser {
     const CharT* next_pos_;
     const CharT* end_;
     uc32 current_;
-    bool ignore_case_;
-    bool multiline_;
-    bool unicode_;
+    // These are the flags specified outside the regexp syntax ie after the
+    // terminating '/' or in the second argument to the constructor.  The current
+    // flags are stored on the RegExpBuilder.
+    JSRegExp::Flags top_level_flags_;
     int captures_started_;
     int capture_count_;  // Only valid after we have scanned for captures.
     bool has_more_;

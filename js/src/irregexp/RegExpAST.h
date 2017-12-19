@@ -151,7 +151,7 @@ class CharacterRange {
     uc32 to() const { return to_; }
     void set_to(uc32 value) { to_ = value; }
     bool is_valid() { return from_ <= to_; }
-    bool IsEverything(uc16 max) { return from_ == 0 && to_ >= max; }
+    bool IsEverything(uc32 max) { return from_ == 0 && to_ >= max; }
     bool IsSingleton() { return (from_ == to_); }
 
     static void AddCaseEquivalents(Zone* zone,
@@ -183,12 +183,12 @@ class CharacterRange {
 class CharacterSet final {
   public:
     explicit CharacterSet(uc16 standard_set_type)
-        : ranges_(NULL), standard_set_type_(standard_set_type) {}
+        : ranges_(nullptr), standard_set_type_(standard_set_type) {}
     explicit CharacterSet(CharacterRangeVector* ranges)
         : ranges_(ranges), standard_set_type_(0) {}
 
     CharacterRangeVector* ranges(Zone* zone);
-    uc16 standard_set_type() { return standard_set_type_; }
+    uc16 standard_set_type() const { return standard_set_type_; }
     void set_standard_set_type(uc16 special_set_type) {
         standard_set_type_ = special_set_type;
     }
@@ -319,7 +319,8 @@ class RegExpAssertion final : public RegExpTree {
     BOUNDARY,
     NON_BOUNDARY
   };
-  explicit RegExpAssertion(AssertionType type) : assertion_type_(type) { }
+  RegExpAssertion(AssertionType type, JSRegExp::Flags flags)
+      : assertion_type_(type), flags_(flags) {}
   void* Accept(RegExpVisitor* visitor, void* data) override;
   RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
   RegExpAssertion* AsAssertion() override;
@@ -331,7 +332,8 @@ class RegExpAssertion final : public RegExpTree {
   AssertionType assertion_type() { return assertion_type_; }
 
  private:
-  AssertionType assertion_type_;
+  const AssertionType assertion_type_;
+  const JSRegExp::Flags flags_;
 };
 
 class RegExpCharacterClass final : public RegExpTree {
@@ -344,12 +346,18 @@ class RegExpCharacterClass final : public RegExpTree {
         NEGATED = 1 << 0,
         CONTAINS_SPLIT_SURROGATE = 1 << 1,
     };
-    using Flags = mozilla::EnumSet<Flag>;
+    using CharacterClassFlags = mozilla::EnumSet<Flag>;
 
-    explicit RegExpCharacterClass(CharacterRangeVector* ranges,
-                                  Flags flags = Flags())
-        : set_(ranges), flags_(flags) {}
-    explicit RegExpCharacterClass(uc16 type) : set_(type), flags_() {}
+    RegExpCharacterClass(
+        CharacterRangeVector* ranges, JSRegExp::Flags flags,
+        CharacterClassFlags character_class_flags = CharacterClassFlags())
+        : set_(ranges),
+          flags_(flags),
+          character_class_flags_(character_class_flags) {}
+    RegExpCharacterClass(uc16 type, JSRegExp::Flags flags)
+        : set_(type),
+          flags_(flags),
+          character_class_flags_(CharacterClassFlags()) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
@@ -380,23 +388,26 @@ class RegExpCharacterClass final : public RegExpTree {
     // D : non-ASCII digit
     // . : non-newline
     // * : All characters, for advancing unanchored regexp
-    uc16 standard_type() { return set_.standard_set_type(); }
+    uc16 standard_type() const { return set_.standard_set_type(); }
     CharacterRangeVector* ranges(Zone* zone) { return set_.ranges(zone); }
     bool is_negated() const { return flags_.contains(NEGATED); }
+    JSRegExp::Flags flags() const { return flags_; }
     bool contains_split_surrogate() const {
         return flags_.contains(CONTAINS_SPLIT_SURROGATE);
     }
 
   private:
     CharacterSet set_;
-    const Flags flags_;
+    const JSRegExp::Flags flags_;
+    const CharacterClassFlags character_class_flags_;
 };
 
 typedef InfallibleVector<uc16, 10> CharacterVector;
 
 class RegExpAtom final : public RegExpTree {
   public:
-    explicit RegExpAtom(CharacterVector* data) : data_(data) {}
+    explicit RegExpAtom(CharacterVector* data, JSRegExp::Flags flags)
+        : data_(data), flags_(flags) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
@@ -409,9 +420,12 @@ class RegExpAtom final : public RegExpTree {
 
     CharacterVector& data() { return *data_; }
     int length() { return data_->length(); }
+    JSRegExp::Flags flags() const { return flags_; }
+    bool ignore_case() const { return flags_.contains(JSRegExp::kIgnoreCase); }
 
   private:
     CharacterVector* data_;
+    const JSRegExp::Flags flags_;
 };
 
 class RegExpText final : public RegExpTree {
@@ -482,7 +496,7 @@ class RegExpQuantifier final : public RegExpTree {
 class RegExpCapture final : public RegExpTree {
   public:
     explicit RegExpCapture(int index)
-      : body_(NULL), index_(index) {}
+      : body_(nullptr), index_(index) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
@@ -581,9 +595,10 @@ typedef InfallibleVector<RegExpCapture*, 1> RegExpCaptureVector;
 
 class RegExpBackReference final : public RegExpTree {
   public:
-    RegExpBackReference() : capture_(nullptr) {}
-    explicit RegExpBackReference(RegExpCapture* capture)
-      : capture_(capture) {}
+    explicit RegExpBackReference(JSRegExp::Flags flags)
+        : capture_(nullptr), flags_(flags) {}
+    RegExpBackReference(RegExpCapture* capture, JSRegExp::Flags flags)
+        : capture_(capture), flags_(flags) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
@@ -599,6 +614,7 @@ class RegExpBackReference final : public RegExpTree {
 
   private:
     RegExpCapture* capture_;
+    const JSRegExp::Flags flags_;
 };
 
 class RegExpEmpty final : public RegExpTree {

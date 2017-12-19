@@ -81,18 +81,16 @@ HexValue(uint32_t c)
 
 template <typename CharT>
 RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, Zone* zone,
-                                  const CharT* chars, const CharT* end, bool multiline,
-                                  bool unicode, bool ignore_case)
+                                  const CharT* chars, const CharT* end,
+                                  JSRegExp::Flags flags)
   : ts(ts),
     zone_(zone),
-    captures_(NULL),
+    captures_(nullptr),
     start_(chars),
     next_pos_(start_),
     end_(end),
     current_(kEndMarker),
-    ignore_case_(ignore_case),
-    multiline_(multiline),
-    unicode_(unicode),
+    top_level_flags_(flags),
     captures_started_(0),
     capture_count_(0),
     has_more_(true),
@@ -111,10 +109,10 @@ inline uc32 RegExpParser<CharT>::ReadNext() {
     position++;
     // Read the whole surrogate pair in case of unicode flag, if possible.
     if (unicode() && position < end_ &&
-        unicode::IsLeadSurrogate(static_cast<uc16>(c0))) {
+        unibrow::Utf16::IsLeadSurrogate(static_cast<uc16>(c0))) {
         uc16 c1 = *position;
-        if (unicode::IsTrailSurrogate(c1)) {
-            c0 = unicode::UTF16Decode(static_cast<uc16>(c0), c1);
+        if (unibrow::Utf16::IsTrailSurrogate(c1)) {
+            c0 = unibrow::Utf16::CombineSurrogatePair(static_cast<uc16>(c0), c1);
             position++;
         }
     }
@@ -269,8 +267,8 @@ RegExpTree* RegExpParser<CharT>::ParsePattern() {
 template <typename CharT>
 RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
     // Used to store current state while parsing subexpressions.
-    RegExpParserState initial_state(NULL, INITIAL, RegExpLookaround::LOOKAHEAD, 0,
-                                    ignore_case(), unicode(), zone());
+    RegExpParserState initial_state(nullptr, INITIAL, RegExpLookaround::LOOKAHEAD,
+                                    0, top_level_flags_, zone());
     RegExpParserState* state = &initial_state;
     // Cache the builder in a local variable for quick access.
     RegExpBuilder* builder = initial_state.builder();
@@ -336,12 +334,14 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             return ReportError(JSMSG_NOTHING_TO_REPEAT);
           case '^': {
             Advance();
-            if (multiline()) {
+            if (builder->multiline()) {
                 builder->AddAssertion(
-                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::START_OF_LINE));
+                    zone_->newInfallible<RegExpAssertion>(
+                            RegExpAssertion::START_OF_LINE, builder->flags()));
             } else {
                 builder->AddAssertion(
-                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::START_OF_INPUT));
+                    zone_->newInfallible<RegExpAssertion>(
+                            RegExpAssertion::START_OF_INPUT, builder->flags()));
                 set_contains_anchor();
             }
             continue;
@@ -349,9 +349,10 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
           case '$': {
             Advance();
             RegExpAssertion::AssertionType assertion_type =
-                multiline() ? RegExpAssertion::END_OF_LINE
-                            : RegExpAssertion::END_OF_INPUT;
-            builder->AddAssertion(zone_->newInfallible<RegExpAssertion>(assertion_type));
+                builder->multiline()() ? RegExpAssertion::END_OF_LINE
+                                       : RegExpAssertion::END_OF_INPUT;
+            builder->AddAssertion(
+                zone_->newInfallible<RegExpAssertion>(assertion_type, builder->flags()));
             continue;
           }
           case '.': {
@@ -359,7 +360,7 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             CharacterRangeVector* ranges =
                 zone_->newInfallible<CharacterRangeVector>(*zone());
 
-            // Everything except \x0a, \x0d, \u2028 and \u2029
+            // Everything except \x0A, \x0D, \u2028 and \u2029
             CharacterRange::AddClassEscape('.', ranges, false, zone());
 
             RegExpCharacterClass* cc = zone_->newInfallible<RegExpCharacterClass>(ranges);
@@ -420,13 +421,13 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                 return ReportError(JSMSG_ESCAPE_AT_END_OF_REGEXP);
               case 'b':
                 Advance(2);
-                builder->AddAssertion(
-                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::BOUNDARY));
+                builder->AddAssertion(zone_->newInfallible<RegExpAssertion>(
+                    RegExpAssertion::BOUNDARY, builder->flags()));
                 continue;
               case 'B':
                 Advance(2);
-                builder->AddAssertion(
-                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::NON_BOUNDARY));
+                builder->AddAssertion(zone_->newInfallible<RegExpAssertion>(
+                    RegExpAssertion::NON_BOUNDARY, builder->flags()));
                 continue;
                 // AtomEscape ::
                 //   CharacterClassEscape
@@ -443,10 +444,10 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                 Advance(2);
                 CharacterRangeVector* ranges =
                     zone_->newInfallible<CharacterRangeVector>(*zone());
-                CharacterRange::AddClassEscape(c, ranges,
-                                               unicode() && ignore_case(), zone());
+                CharacterRange::AddClassEscape(
+                    c, ranges, unicode() && builder->ignore_case(), zone());
                 RegExpCharacterClass* cc =
-                    zone_->newInfallible<RegExpCharacterClass>(ranges);
+                    zone_->newInfallible<RegExpCharacterClass>(ranges, builder->flags());
                 builder->AddCharacterClass(cc);
                 break;
               }
@@ -471,7 +472,8 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                         builder->AddEmpty();
                     } else {
                         RegExpCapture* capture = GetCapture(index);
-                        RegExpTree* atom = zone_->newInfallible<RegExpBackReference>(capture);
+                        RegExpTree* atom =
+                            zone_->newInfallible<RegExpBackReference>(capture, builder->flags());
                         builder->AddAtom(atom);
                     }
                     break;
@@ -539,7 +541,7 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                     builder->AddCharacter('\\');
                 } else {
                     Advance(2);
-                    builder->AddCharacter(controlLetter & 0x1f);
+                    builder->AddCharacter(controlLetter & 0x1F);
                 }
                 break;
               }
@@ -1188,9 +1190,10 @@ RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
         ranges->append(CharacterRange::Everything());
         is_negated = !is_negated;
     }
-    RegExpCharacterClass::Flags flags;
-    if (is_negated) flags = RegExpCharacterClass::NEGATED;
-    return zone_->newInfallible<RegExpCharacterClass>(ranges, flags);
+    RegExpCharacterClass::CharacterClassFlags character_class_flags;
+    if (is_negated) character_class_flags = RegExpCharacterClass::NEGATED;
+    return zone_->newInfallible<RegExpCharacterClass>(
+        ranges, builder->flags(), character_class_flags);
 }
 
 // ----------------------------------------------------------------------------
@@ -1202,12 +1205,11 @@ RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
 #define LAST(x)
 #endif
 
-RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
+RegExpBuilder::RegExpBuilder(Zone* zone, JSRegExp::Flags flags)
   : zone_(zone),
     pending_empty_(false),
-    ignore_case_(ignore_case),
-    unicode_(unicode),
-    characters_(NULL),
+    flags_(flags),
+    characters_(nullptr),
     pending_surrogate_(kNoPendingSurrogate),
     terms_(),
     alternatives_()
@@ -1240,7 +1242,7 @@ void RegExpBuilder::AddTrailSurrogate(uc16 trail_surrogate) {
             surrogate_pair->append(lead_surrogate);
             surrogate_pair->append(trail_surrogate);
             RegExpAtom* atom =
-                zone()->newInfallible<RegExpAtom>(surrogate_pair);
+                zone()->newInfallible<RegExpAtom>(surrogate_pair, flags_);
             AddAtom(atom);
         }
     } else {
@@ -1261,9 +1263,9 @@ void RegExpBuilder::FlushPendingSurrogate() {
 void RegExpBuilder::FlushCharacters() {
     FlushPendingSurrogate();
     pending_empty_ = false;
-    if (characters_ != NULL) {
-        RegExpTree* atom = zone()->newInfallible<RegExpAtom>(characters_);
-        characters_ = NULL;
+    if (characters_ != nullptr) {
+        RegExpTree* atom = zone()->newInfallible<RegExpAtom>(characters_, flags_);
+        characters_ = nullptr;
         text_.Add(atom, zone());
         LAST(ADD_ATOM);
     }
@@ -1290,7 +1292,7 @@ void RegExpBuilder::AddCharacter(uc16 c) {
     if (NeedsDesugaringForIgnoreCase(c)) {
         AddCharacterClassForDesugaring(c);
     } else {
-        if (characters_ == NULL) {
+        if (characters_ == nullptr) {
             characters_ = zone()->newInfallible<CharacterVector>(*zone());
         }
         characters_->append(c);
@@ -1334,7 +1336,7 @@ void RegExpBuilder::AddCharacterClass(RegExpCharacterClass* cc) {
 
 void RegExpBuilder::AddCharacterClassForDesugaring(uc32 c) {
     AddTerm(zone_->newInfallible<RegExpCharacterClass>(
-        CharacterRange::List(zone(), CharacterRange::Singleton(c))));
+        CharacterRange::List(zone(), CharacterRange::Singleton(c)), flags_));
 }
 
 void RegExpBuilder::AddAtom(RegExpTree* term) {
@@ -1432,7 +1434,7 @@ bool RegExpBuilder::AddQuantifierToAtom(
         return true;
     }
     RegExpTree* atom;
-    if (characters_ != NULL) {
+    if (characters_ != nullptr) {
         DCHECK(last_added_ == ADD_CHAR);
         // Last atom was character.
         CharacterVector* char_vector = characters_;
@@ -1440,12 +1442,12 @@ bool RegExpBuilder::AddQuantifierToAtom(
         if (num_chars > 1) {
             CharacterVector* prefix = zone()->newInfallible<CharacterVector>(*zone());
             prefix->append(char_vector->begin(), num_chars - 1);
-            text_.Add(zone()->newInfallible<RegExpAtom>(prefix), zone());
+            text_.Add(zone()->newInfallible<RegExpAtom>(prefix, flags_), zone());
             char_vector = zone()->newInfallible<CharacterVector>(*zone());
             char_vector->append((*characters_)[num_chars - 1]);
         }
-        characters_ = NULL;
-        atom = zone()->newInfallible<RegExpAtom>(char_vector);
+        characters_ = nullptr;
+        atom = zone()->newInfallible<RegExpAtom>(char_vector, flags_);
         FlushText();
     } else if (text_.length() > 0) {
         DCHECK(last_added_ == ADD_ATOM);

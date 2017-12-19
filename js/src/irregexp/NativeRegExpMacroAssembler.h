@@ -86,7 +86,7 @@ class MOZ_STACK_CLASS NativeRegExpMacroAssembler final : public RegExpMacroAssem
 {
   public:
     // Type of input string to generate code for.
-    enum Mode { LATIN1 = 1, CHAR16 = 2 };
+    enum Mode { LATIN1 = 1, UC16 = 2 };
 
     NativeRegExpMacroAssembler(JSContext* cx, LifoAlloc* alloc, Mode mode, int registers_to_save,
                                RegExpShared::JitCodeTables& tables);
@@ -157,7 +157,7 @@ class MOZ_STACK_CLASS NativeRegExpMacroAssembler final : public RegExpMacroAssem
 
     // Byte size of chars in the string to match (decided by the Mode argument)
     inline int char_size() { return static_cast<int>(mode_); }
-    inline jit::Scale factor() { return mode_ == CHAR16 ? jit::TimesTwo : jit::TimesOne; }
+    inline jit::Scale factor() { return mode_ == UC16 ? jit::TimesTwo : jit::TimesOne; }
 
     jit::Label* BranchOrBacktrack(jit::Label* branch);
 
