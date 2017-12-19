@@ -59,7 +59,7 @@ class BoyerMooreLookahead;
 // integers (< 32).  May do zone-allocation.
 class OutSet {
   public:
-    OutSet() : first_(0), remaining_(nullptr), successors_(nullptr) {}
+    OutSet() : first_(0), remaining_(NULL), successors_(NULL) {}
     OutSet* Extend(unsigned value, Zone* zone);
     bool Get(unsigned value) const;
     static const unsigned kFirstLimit = 32;
@@ -79,7 +79,7 @@ class OutSet {
     OutSetVector* successors(Zone* zone) { return successors_; }
 
     OutSet(uint32_t first, RemainingVector* remaining)
-      : first_(first), remaining_(remaining), successors_(nullptr) {}
+      : first_(first), remaining_(remaining), successors_(NULL) {}
 
     const RemainingVector& remaining() const { return *remaining_; }
     RemainingVector& remaining() { return *remaining_; }
@@ -231,8 +231,8 @@ class QuickCheckDetails {
 class RegExpNode {
   public:
     explicit RegExpNode(Zone* zone)
-      : replacement_(nullptr), trace_count_(0), zone_(zone) {
-      bm_info_[0] = bm_info_[1] = nullptr;
+      : replacement_(NULL), trace_count_(0), zone_(zone) {
+      bm_info_[0] = bm_info_[1] = NULL;
     }
     virtual ~RegExpNode() {}
     virtual void Accept(NodeVisitor* visitor) = 0;
@@ -276,7 +276,7 @@ class RegExpNode {
     // character and that has no guards on it.
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
             RegExpCompiler* compiler) {
-        return nullptr;
+        return NULL;
     }
 
     // Collects information on the possible code units (mod 128) that can match if
@@ -292,7 +292,7 @@ class RegExpNode {
 
     // If we know that the input is one-byte then there are some nodes that can
     // never match.  This method returns a node that can be substituted for
-    // itself, or nullptr if the node can never match.
+    // itself, or NULL if the node can never match.
     virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode) {
         return this;
     }
@@ -672,7 +672,7 @@ typedef InfallibleVector<Guard*, 1> GuardVector;
 
 class GuardedAlternative {
   public:
-    explicit GuardedAlternative(RegExpNode* node) : node_(node), guards_(nullptr) { }
+    explicit GuardedAlternative(RegExpNode* node) : node_(node), guards_(NULL) { }
     void AddGuard(Guard* guard, Zone* zone);
     RegExpNode* node() { return node_; }
     void set_node(RegExpNode* node) { node_ = node; }
@@ -778,8 +778,8 @@ class LoopChoiceNode : public ChoiceNode {
   public:
     LoopChoiceNode(bool body_can_be_zero_length, Zone* zone)
       : ChoiceNode(2, zone),
-        loop_node_(nullptr),
-        continue_node_(nullptr),
+        loop_node_(NULL),
+        continue_node_(NULL),
         body_can_be_zero_length_(body_can_be_zero_length) {}
 
     void AddLoopAlternative(GuardedAlternative alt);
@@ -977,7 +977,7 @@ class Trace {
     class DeferredAction {
       public:
         DeferredAction(ActionNode::ActionType action_type, int reg)
-          : action_type_(action_type), reg_(reg), next_(nullptr) { }
+          : action_type_(action_type), reg_(reg), next_(NULL) { }
 
         DeferredAction* next() { return next_; }
         bool Mentions(int reg);
@@ -1034,10 +1034,10 @@ class Trace {
 
     Trace()
       : cp_offset_(0),
-        actions_(nullptr),
-        backtrack_(nullptr),
-        stop_node_(nullptr),
-        loop_label_(nullptr),
+        actions_(NULL),
+        backtrack_(NULL),
+        stop_node_(NULL),
+        loop_label_(NULL),
         characters_preloaded_(0),
         bound_checked_up_to_(0),
         flush_budget_(100),
@@ -1063,8 +1063,8 @@ class Trace {
     // a trivial trace is recorded in a label in the node so that gotos can be
     // generated to that code.
     bool is_trivial() {
-        return backtrack_ == nullptr &&
-               actions_ == nullptr &&
+        return backtrack_ == NULL &&
+               actions_ == NULL &&
                cp_offset_ == 0 &&
                characters_preloaded_ == 0 &&
                bound_checked_up_to_ == 0 &&
@@ -1091,7 +1091,7 @@ class Trace {
     // These set methods and AdvanceCurrentPositionInTrace should be used only on
     // new traces - the intention is that traces are immutable after creation.
     void add_action(DeferredAction* new_action) {
-        DCHECK(new_action->next_ == nullptr);
+        DCHECK(new_action->next_ == NULL);
         new_action->next_ = actions_;
         actions_ = new_action;
     }
@@ -1161,7 +1161,7 @@ class Analysis : public NodeVisitor {
         ignore_case_(ignore_case),
         is_one_byte_(is_one_byte),
         unicode_(unicode),
-        error_message_(nullptr) {}
+        error_message_(NULL) {}
 
     void EnsureAnalyzed(RegExpNode* node);
 
@@ -1171,9 +1171,9 @@ class Analysis : public NodeVisitor {
 #undef DECLARE_VISIT
     virtual void VisitLoopChoice(LoopChoiceNode* that);
 
-    bool has_failed() { return error_message_ != nullptr; }
+    bool has_failed() { return error_message_ != NULL; }
     const char* error_message() {
-        DCHECK(error_message_ != nullptr);
+        DCHECK(error_message_ != NULL);
         return error_message_;
     }
     void fail(const char* error_message) {
@@ -1195,7 +1195,7 @@ class Analysis : public NodeVisitor {
 
 struct RegExpCompileData {
     RegExpCompileData()
-      : tree(nullptr),
+      : tree(NULL),
         simple(true),
         contains_anchor(false),
         capture_count(0) {}

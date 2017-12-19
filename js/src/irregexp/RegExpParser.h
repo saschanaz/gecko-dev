@@ -65,20 +65,20 @@ ParsePatternSyntax(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc,
 // a single element. The last element added is stored outside the backing list,
 // and if no more than one element is ever added, the ZoneList isn't even
 // allocated.
-// Elements must not be nullptr pointers.
+// Elements must not be NULL pointers.
 template <typename T, int initial_size>
 class BufferedVector {
   public:
     typedef InfallibleVector<T*, 1> VectorType;
 
-    BufferedVector() : list_(nullptr), last_(nullptr) {}
+    BufferedVector() : list_(NULL), last_(NULL) {}
 
     // Adds element at end of list. This element is buffered and can
     // be read using last() or removed using RemoveLast until a new Add or until
     // RemoveLast or GetList has been called.
     void Add(T* value, Zone* zone) {
-        if (last_ != nullptr) {
-            if (list_ == nullptr) {
+        if (last_ != NULL) {
+            if (list_ == NULL) {
                 list_ = zone->newInfallible<VectorType>(*zone);
                 list_->reserve(initial_size);
             }
@@ -88,28 +88,28 @@ class BufferedVector {
     }
 
     T* last() {
-        DCHECK(last_ != nullptr);
+        DCHECK(last_ != NULL);
         return last_;
     }
 
     T* RemoveLast() {
-        DCHECK(last_ != nullptr);
+        DCHECK(last_ != NULL);
         T* result = last_;
-        if ((list_ != nullptr) && (list_->length() > 0))
+        if ((list_ != NULL) && (list_->length() > 0))
             last_ = list_->popCopy();
         else
-            last_ = nullptr;
+            last_ = NULL;
         return result;
     }
 
     T* Get(int i) {
         DCHECK((0 <= i) && (i < length()));
-        if (list_ == nullptr) {
+        if (list_ == NULL) {
             DCHECK_EQ(0, i);
             return last_;
         } else {
             if (i == list_->length()) {
-                DCHECK(last_ != nullptr);
+                DCHECK(last_ != NULL);
                 return last_;
             } else {
                 return list_->at(i);
@@ -118,21 +118,21 @@ class BufferedVector {
     }
 
     void Clear() {
-        list_ = nullptr;
-        last_ = nullptr;
+        list_ = NULL;
+        last_ = NULL;
     }
 
     int length() {
-        int length = (list_ == nullptr) ? 0 : list_->length();
-        return length + ((last_ == nullptr) ? 0 : 1);
+        int length = (list_ == NULL) ? 0 : list_->length();
+        return length + ((last_ == NULL) ? 0 : 1);
     }
 
     VectorType* GetList(Zone* zone) {
-        if (list_ == nullptr)
+        if (list_ == NULL)
             list_ = zone->newInfallible<VectorType>(*zone);
-        if (last_ != nullptr) {
+        if (last_ != NULL) {
             list_->append(last_);
-            last_ = nullptr;
+            last_ = NULL;
         }
         return list_;
     }
@@ -305,7 +305,7 @@ class RegExpParser {
         {}
         // Parser state of containing expression, if any.
         RegExpParserState* previous_state() { return previous_state_; }
-        bool IsSubexpression() { return previous_state_ != nullptr; }
+        bool IsSubexpression() { return previous_state_ != NULL; }
         // RegExpBuilder building this regexp's AST.
         RegExpBuilder* builder() { return builder_; }
         // Type of regexp being parsed (parenthesized group or entire regexp).

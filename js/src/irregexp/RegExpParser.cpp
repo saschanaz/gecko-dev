@@ -774,7 +774,7 @@ RegExpTree* RegExpParser<CharT>::ParsePattern() {
 template <typename CharT>
 RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
     // Used to store current state while parsing subexpressions.
-    RegExpParserState initial_state(nullptr, INITIAL, RegExpLookaround::LOOKAHEAD, 0,
+    RegExpParserState initial_state(NULL, INITIAL, RegExpLookaround::LOOKAHEAD, 0,
                                     ignore_case(), unicode(), zone());
     RegExpParserState* state = &initial_state;
     // Cache the builder in a local variable for quick access.
@@ -1794,7 +1794,7 @@ RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
     pending_empty_(false),
     ignore_case_(ignore_case),
     unicode_(unicode),
-    characters_(nullptr)
+    characters_(NULL)
 #ifdef DEBUG
   , last_added_(ADD_NONE)
 #endif
@@ -1802,9 +1802,9 @@ RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
 
 void RegExpBuilder::FlushCharacters() {
     pending_empty_ = false;
-    if (characters_ != nullptr) {
+    if (characters_ != NULL) {
         RegExpTree* atom = zone()->newInfallible<RegExpAtom>(characters_);
-        characters_ = nullptr;
+        characters_ = NULL;
         text_.Add(atom, zone());
 #ifdef DEBUG
         last_added_ = ADD_ATOM;
@@ -1829,8 +1829,9 @@ void RegExpBuilder::FlushText() {
 
 void RegExpBuilder::AddCharacter(uc16 c) {
     pending_empty_ = false;
-    if (characters_ == nullptr)
+    if (characters_ == NULL) {
         characters_ = zone()->newInfallible<CharacterVector>(*zone());
+    }
     characters_->append(c);
 #ifdef DEBUG
     last_added_ = ADD_CHAR;
@@ -1905,7 +1906,7 @@ bool RegExpBuilder::AddQuantifierToAtom(int min, int max,
         return true;
     }
     RegExpTree* atom;
-    if (characters_ != nullptr) {
+    if (characters_ != NULL) {
         DCHECK(last_added_ == ADD_CHAR);
         // Last atom was character.
         CharacterVector* char_vector = characters_;
@@ -1917,7 +1918,7 @@ bool RegExpBuilder::AddQuantifierToAtom(int min, int max,
             char_vector = zone()->newInfallible<CharacterVector>(*zone());
             char_vector->append((*characters_)[num_chars - 1]);
         }
-        characters_ = nullptr;
+        characters_ = NULL;
         atom = zone()->newInfallible<RegExpAtom>(char_vector);
         FlushText();
     } else if (text_.length() > 0) {

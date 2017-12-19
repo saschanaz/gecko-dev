@@ -41,7 +41,7 @@ FOR_EACH_REG_EXP_TREE_TYPE(MAKE_ACCEPT)
 #undef MAKE_ACCEPT
 
 #define MAKE_TYPE_CASE(Name)                                         \
-  RegExp##Name* RegExpTree::As##Name() { return nullptr; }           \
+  RegExp##Name* RegExpTree::As##Name() { return NULL; }              \
   bool RegExpTree::Is##Name() { return false; }
 FOR_EACH_REG_EXP_TREE_TYPE(MAKE_TYPE_CASE)
 #undef MAKE_TYPE_CASE

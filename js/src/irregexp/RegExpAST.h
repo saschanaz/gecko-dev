@@ -194,7 +194,7 @@ class CharacterRange {
 class CharacterSet final {
   public:
     explicit CharacterSet(uc16 standard_set_type)
-        : ranges_(nullptr), standard_set_type_(standard_set_type) {}
+        : ranges_(NULL), standard_set_type_(standard_set_type) {}
     explicit CharacterSet(CharacterRangeVector* ranges)
         : ranges_(ranges), standard_set_type_(0) {}
 
@@ -490,7 +490,7 @@ class RegExpQuantifier final : public RegExpTree {
 class RegExpCapture final : public RegExpTree {
   public:
     explicit RegExpCapture(int index)
-      : body_(nullptr), index_(index) {}
+      : body_(NULL), index_(index) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
