@@ -160,13 +160,13 @@ class CharacterRange {
 
     // Whether a range list is in canonical form: Ranges ordered by from value,
     // and ranges non-overlapping and non-adjacent.
-    static bool IsCanonical(const CharacterRangeVector& ranges);
+    static bool IsCanonical(const CharacterRangeVector* ranges);
 
     // Convert range list to canonical form. The characters covered by the ranges
     // will still be the same, but no character is in more than one range, and
     // adjacent ranges are merged. The resulting list may be shorter than the
     // original, but cannot be longer.
-    static void Canonicalize(CharacterRangeVector& ranges);
+    static void Canonicalize(CharacterRangeVector* ranges);
 
     // Negate the contents of a character range in canonical form.
     static void Negate(const LifoAlloc* alloc,
@@ -197,7 +197,7 @@ class CharacterSet final {
     explicit CharacterSet(CharacterRangeVector* ranges)
         : ranges_(ranges), standard_set_type_(0) {}
 
-    CharacterRangeVector& ranges(LifoAlloc* alloc);
+    CharacterRangeVector* ranges(LifoAlloc* alloc);
     uc16 standard_set_type() { return standard_set_type_; }
     void set_standard_set_type(uc16 special_set_type) {
         standard_set_type_ = special_set_type;
@@ -287,7 +287,7 @@ class RegExpDisjunction final : public RegExpTree {
     int min_match() override { return min_match_; }
     int max_match() override { return max_match_; }
 
-    const RegExpTreeVector& alternatives() { return *alternatives_; }
+    const RegExpTreeVector* alternatives() { return alternatives_; }
 
   private:
     bool SortConsecutiveAtoms(RegExpCompiler* compiler);
@@ -311,7 +311,7 @@ class RegExpAlternative final : public RegExpTree {
     int min_match() override { return min_match_; }
     int max_match() override { return max_match_; }
 
-    const RegExpTreeVector& nodes() { return *nodes_; }
+    const RegExpTreeVector* nodes() { return nodes_; }
 
   private:
     RegExpTreeVector* nodes_;
@@ -394,7 +394,7 @@ class RegExpCharacterClass final : public RegExpTree {
     // . : non-unicode non-newline
     // * : All characters
     uc16 standard_type() { return set_.standard_set_type(); }
-    CharacterRangeVector& ranges(LifoAlloc* alloc) { return set_.ranges(alloc); }
+    CharacterRangeVector* ranges(LifoAlloc* alloc) { return set_.ranges(alloc); }
     bool is_negated() const { return flags_.contains(NEGATED); }
 
   private:
@@ -440,7 +440,7 @@ class RegExpText final : public RegExpTree {
         elements_.append(elm);
         length_ += elm.length();
     }
-    const TextElementVector& elements() { return elements_; }
+    const TextElementVector* elements() { return &elements_; }
 
   private:
     TextElementVector elements_;

@@ -4514,14 +4514,14 @@ ConvertRegExpTreeToObject(JSContext* cx, irregexp::RegExpTree* tree)
 
     auto TreeVectorProp = [&ObjectProp](JSContext* cx, HandleObject obj,
                                         const char* name,
-                                        const irregexp::RegExpTreeVector& nodes) {
-        size_t len = nodes.length();
+                                        const irregexp::RegExpTreeVector* nodes) {
+        size_t len = nodes->length();
         RootedObject array(cx, JS_NewArrayObject(cx, len));
         if (!array)
             return false;
 
         for (size_t i = 0; i < len; i++) {
-            RootedObject child(cx, ConvertRegExpTreeToObject(cx, nodes[i]));
+            RootedObject child(cx, ConvertRegExpTreeToObject(cx, nodes->at(i)));
             if (!child)
                 return false;
 
@@ -4534,14 +4534,14 @@ ConvertRegExpTreeToObject(JSContext* cx, irregexp::RegExpTree* tree)
 
     auto CharRangesProp = [&ObjectProp](JSContext* cx, HandleObject obj,
                                         const char* name,
-                                        const irregexp::CharacterRangeVector& ranges) {
-        size_t len = ranges.length();
+                                        const irregexp::CharacterRangeVector* ranges) {
+        size_t len = ranges->length();
         RootedObject array(cx, JS_NewArrayObject(cx, len));
         if (!array)
             return false;
 
         for (size_t i = 0; i < len; i++) {
-            const irregexp::CharacterRange& range = ranges[i];
+            const irregexp::CharacterRange& range = ranges->at(i);
             RootedObject rangeObj(cx, JS_NewPlainObject(cx));
             if (!rangeObj)
                 return false;
@@ -4568,14 +4568,14 @@ ConvertRegExpTreeToObject(JSContext* cx, irregexp::RegExpTree* tree)
     };
 
     auto ElemProp = [&ObjectProp](JSContext* cx, HandleObject obj,
-                                  const char* name, const irregexp::TextElementVector& elements) {
-        size_t len = elements.length();
+                                  const char* name, const irregexp::TextElementVector* elements) {
+        size_t len = elements->length();
         RootedObject array(cx, JS_NewArrayObject(cx, len));
         if (!array)
             return false;
 
         for (size_t i = 0; i < len; i++) {
-            const irregexp::TextElement& element = elements[i];
+            const irregexp::TextElement& element = elements->at(i);
             RootedObject elemTree(cx, ConvertRegExpTreeToObject(cx, element.tree()));
             if (!elemTree)
                 return false;

@@ -46,6 +46,8 @@ using mozilla::ArrayLength;
 using mozilla::DebugOnly;
 using mozilla::Maybe;
 
+using jit::Label;
+
 static const int kMaxOneByteCharCode = 0xff;
 static const int kMaxUtf16CodeUnit = 0xffff;
 static const int kRangeEndMarker = 0x10000;
@@ -241,8 +243,8 @@ void RegExpCharacterClass::AppendToText(RegExpText* text) {
 }
 
 void RegExpText::AppendToText(RegExpText* text) {
-    for (size_t i = 0; i < elements().length(); i++)
-        text->AddElement(elements().at(i));
+    for (size_t i = 0; i < elements()->length(); i++)
+        text->AddElement(elements()->at(i));
 }
 
 TextElement TextElement::Atom(RegExpAtom* atom) {
@@ -424,7 +426,7 @@ RegExpCode RegExpCompiler::Assemble(JSContext* cx,
     // because the jit::MacroAssembler turns these assertions on by default.
     LifoAlloc::AutoFallibleScope fallibleAllocator(alloc());
 
-    jit::Label fail;
+    Label fail;
     macro_assembler_->PushBacktrack(&fail);
     Trace new_trace;
     start->Emit(this, &new_trace);
@@ -691,7 +693,7 @@ void Trace::Flush(RegExpCompiler* compiler, RegExpNode* successor) {
     }
 
     // Create a new trivial state and generate the node with that.
-    jit::Label undo;
+    Label undo;
     assembler->PushBacktrack(&undo);
     Trace new_state;
     successor->Emit(compiler, &new_state);
@@ -971,14 +973,14 @@ GetCaseIndependentLetters(char16_t character,
 
 typedef bool EmitCharacterFunction(RegExpCompiler* compiler,
                                    uc16 c,
-                                   jit::Label* on_failure,
+                                   Label* on_failure,
                                    int cp_offset,
                                    bool check,
                                    bool preloaded);
 
 static inline bool EmitSimpleCharacter(RegExpCompiler* compiler,
                                        uc16 c,
-                                       jit::Label* on_failure,
+                                       Label* on_failure,
                                        int cp_offset,
                                        bool check,
                                        bool preloaded) {
@@ -1004,7 +1006,7 @@ static inline bool EmitSimpleCharacter(RegExpCompiler* compiler,
 static inline bool
 EmitAtomSingle(RegExpCompiler* compiler,
                char16_t c,
-               jit::Label* on_failure,
+               Label* on_failure,
                int cp_offset,
                bool check,
                bool preloaded)
@@ -1027,7 +1029,7 @@ EmitAtomSingle(RegExpCompiler* compiler,
 
 static bool ShortCutEmitCharacterPair(RegExpMacroAssembler* macro_assembler,
                                       bool latin1, uc16 c1, uc16 c2,
-                                      jit::Label* on_failure) {
+                                      Label* on_failure) {
     uc16 char_mask = MaximumCharacter(latin1);
 
     MOZ_ASSERT(c1 != c2);
@@ -1067,7 +1069,7 @@ static bool ShortCutEmitCharacterPair(RegExpMacroAssembler* macro_assembler,
 static inline bool
 EmitAtomMulti(RegExpCompiler* compiler,
               char16_t c,
-              jit::Label* on_failure,
+              Label* on_failure,
               int cp_offset,
               bool check,
               bool preloaded)
@@ -1082,7 +1084,7 @@ EmitAtomMulti(RegExpCompiler* compiler,
     if (!preloaded) {
         macro_assembler->LoadCurrentCharacter(cp_offset, on_failure, check);
     }
-    jit::Label ok;
+    Label ok;
     MOZ_ASSERT(kEcma262UnCanonicalizeMaxWidth == 4);
     switch (length) {
       case 2: {
@@ -1114,9 +1116,9 @@ EmitAtomMulti(RegExpCompiler* compiler,
 
 static void EmitBoundaryTest(RegExpMacroAssembler* masm,
                              int border,
-                             jit::Label* fall_through,
-                             jit::Label* above_or_equal,
-                             jit::Label* below) {
+                             Label* fall_through,
+                             Label* above_or_equal,
+                             Label* below) {
     if (below != fall_through) {
         masm->CheckCharacterLT(border, below);
         if (above_or_equal != fall_through) masm->JumpOrBacktrack(above_or_equal);
@@ -1128,9 +1130,9 @@ static void EmitBoundaryTest(RegExpMacroAssembler* masm,
 static void EmitDoubleBoundaryTest(RegExpMacroAssembler* masm,
                                    int first,
                                    int last,
-                                   jit::Label* fall_through,
-                                   jit::Label* in_range,
-                                   jit::Label* out_of_range) {
+                                   Label* fall_through,
+                                   Label* in_range,
+                                   Label* out_of_range) {
     if (in_range == fall_through) {
         if (first == last) {
             masm->CheckNotCharacter(first, out_of_range);
@@ -1152,13 +1154,13 @@ typedef InfallibleVector<int, 4> RangeBoundaryVector;
 // even_label is for ranges[i] to ranges[i + 1] where i - start_index is even.
 // odd_label is for ranges[i] to ranges[i + 1] where i - start_index is odd.
 static void EmitUseLookupTable(RegExpMacroAssembler* masm,
-                               RangeBoundaryVector& ranges,
+                               RangeBoundaryVector* ranges,
                                int start_index,
                                int end_index,
                                int min_char,
-                               jit::Label* fall_through,
-                               jit::Label* even_label,
-                               jit::Label* odd_label) {
+                               Label* fall_through,
+                               Label* even_label,
+                               Label* odd_label) {
     static const int kSize = RegExpMacroAssembler::kTableSize;
     static const int kMask = RegExpMacroAssembler::kTableMask;
 
@@ -1166,13 +1168,13 @@ static void EmitUseLookupTable(RegExpMacroAssembler* masm,
 
     // Assert that everything is on one kTableSize page.
     for (int i = start_index; i <= end_index; i++) {
-        MOZ_ASSERT((ranges.at(i) & ~kMask) == base);
+        MOZ_ASSERT((ranges->at(i) & ~kMask) == base);
     }
-    MOZ_ASSERT(start_index == 0 || (ranges.at(start_index - 1) & ~kMask) <= base);
+    MOZ_ASSERT(start_index == 0 || (ranges->at(start_index - 1) & ~kMask) <= base);
 
     char templ[kSize];
-    jit::Label* on_bit_set;
-    jit::Label* on_bit_clear;
+    Label* on_bit_set;
+    Label* on_bit_clear;
     int bit;
     if (even_label == fall_through) {
         on_bit_set = odd_label;
@@ -1183,13 +1185,13 @@ static void EmitUseLookupTable(RegExpMacroAssembler* masm,
         on_bit_clear = odd_label;
         bit = 0;
     }
-    for (int i = 0; i < (ranges.at(start_index) & kMask) && i < kSize; i++) {
+    for (int i = 0; i < (ranges->at(start_index) & kMask) && i < kSize; i++) {
         templ[i] = bit;
     }
     int j = 0;
     bit ^= 1;
     for (int i = start_index; i < end_index; i++) {
-        for (j = (ranges.at(i) & kMask); j < (ranges.at(i + 1) & kMask); j++) {
+        for (j = (ranges->at(i) & kMask); j < (ranges->at(i + 1) & kMask); j++) {
             templ[j] = bit;
         }
         bit ^= 1;
@@ -1216,18 +1218,18 @@ static void EmitUseLookupTable(RegExpMacroAssembler* masm,
 }
 
 static void CutOutRange(RegExpMacroAssembler* masm,
-                        RangeBoundaryVector& ranges,
+                        RangeBoundaryVector* ranges,
                         int start_index,
                         int end_index,
                         int cut_index,
-                        jit::Label* even_label,
-                        jit::Label* odd_label) {
+                        Label* even_label,
+                        Label* odd_label) {
     bool odd = (((cut_index - start_index) & 1) == 1);
-    jit::Label* in_range_label = odd ? odd_label : even_label;
-    jit::Label dummy;
+    Label* in_range_label = odd ? odd_label : even_label;
+    Label dummy;
     EmitDoubleBoundaryTest(masm,
-                           ranges.at(cut_index),
-                           ranges.at(cut_index + 1) - 1,
+                           ranges->at(cut_index),
+                           ranges->at(cut_index + 1) - 1,
                            &dummy,
                            in_range_label,
                            &dummy);
@@ -1236,16 +1238,16 @@ static void CutOutRange(RegExpMacroAssembler* masm,
     // range that is a merger of the two ranges on either side of the one we
     // are cutting out.  The oddity of the labels is preserved.
     for (int j = cut_index; j > start_index; j--) {
-        ranges.at(j) = ranges.at(j - 1);
+        ranges->at(j) = ranges->at(j - 1);
     }
     for (int j = cut_index + 1; j < end_index; j++) {
-        ranges.at(j) = ranges.at(j + 1);
+        ranges->at(j) = ranges->at(j + 1);
     }
 }
 
 // Unicode case.  Split the search space into kSize spaces that are handled
 // with recursion.
-static void SplitSearchSpace(RangeBoundaryVector& ranges,
+static void SplitSearchSpace(RangeBoundaryVector* ranges,
                              int start_index,
                              int end_index,
                              int* new_start_index,
@@ -1254,13 +1256,13 @@ static void SplitSearchSpace(RangeBoundaryVector& ranges,
     static const int kSize = RegExpMacroAssembler::kTableSize;
     static const int kMask = RegExpMacroAssembler::kTableMask;
 
-    int first = ranges.at(start_index);
-    int last = ranges.at(end_index) - 1;
+    int first = ranges->at(start_index);
+    int last = ranges->at(end_index) - 1;
 
     *new_start_index = start_index;
-    *border = (ranges.at(start_index) & ~kMask) + kSize;
+    *border = (ranges->at(start_index) & ~kMask) + kSize;
     while (*new_start_index < end_index) {
-        if (ranges.at(*new_start_index) > *border) break;
+        if (ranges->at(*new_start_index) > *border) break;
         (*new_start_index)++;
     }
     // new_start_index is the index of the first edge that is beyond the
@@ -1282,13 +1284,12 @@ static void SplitSearchSpace(RangeBoundaryVector& ranges,
     if (*border - 1 > kMaxOneByteCharCode &&  // Latin1 case.
         end_index - start_index > (*new_start_index - start_index) * 2 &&
         last - first > kSize * 2 && binary_chop_index > *new_start_index &&
-        ranges.at(binary_chop_index) >= first + 2 * kSize)
-    {
+        ranges->at(binary_chop_index) >= first + 2 * kSize) {
         int scan_forward_for_section_border = binary_chop_index;;
-        int new_border = (ranges.at(binary_chop_index) | kMask) + 1;
+        int new_border = (ranges->at(binary_chop_index) | kMask) + 1;
 
         while (scan_forward_for_section_border < end_index) {
-            if (ranges.at(scan_forward_for_section_border) > new_border) {
+            if (ranges->at(scan_forward_for_section_border) > new_border) {
                 *new_start_index = scan_forward_for_section_border;
                 *border = new_border;
                 break;
@@ -1299,11 +1300,11 @@ static void SplitSearchSpace(RangeBoundaryVector& ranges,
 
     MOZ_ASSERT(*new_start_index > start_index);
     *new_end_index = *new_start_index - 1;
-    if (ranges.at(*new_end_index) == *border) {
+    if (ranges->at(*new_end_index) == *border) {
         (*new_end_index)--;
     }
-    if (*border >= ranges.at(end_index)) {
-        *border = ranges.at(end_index);
+    if (*border >= ranges->at(end_index)) {
+        *border = ranges->at(end_index);
         *new_start_index = end_index;  // Won't be used.
         *new_end_index = end_index - 1;
     }
@@ -1315,15 +1316,15 @@ static void SplitSearchSpace(RangeBoundaryVector& ranges,
 // know that the character is in the range of min_char to max_char inclusive.
 // Either label can be nullptr indicating backtracking.  Either label can also be
 // equal to the fall_through label.
-static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector& ranges,
+static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector* ranges,
                              int start_index, int end_index, uc32 min_char,
-                             uc32 max_char, jit::Label* fall_through,
-                             jit::Label* even_label, jit::Label* odd_label) {
+                             uc32 max_char, Label* fall_through,
+                             Label* even_label, Label* odd_label) {
     MOZ_ASSERT(min_char <= kMaxUtf16CodeUnit);
     MOZ_ASSERT(max_char <= kMaxUtf16CodeUnit);
 
-    int first = ranges.at(start_index);
-    int last = ranges.at(end_index) - 1;
+    int first = ranges->at(start_index);
+    int last = ranges->at(end_index) - 1;
 
     MOZ_ASSERT(min_char < first);
 
@@ -1350,7 +1351,7 @@ static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector& ra
         static int kNoCutIndex = -1;
         int cut = kNoCutIndex;
         for (int i = start_index; i < end_index; i++) {
-            if (ranges.at(i) == ranges.at(i + 1) - 1) {
+            if (ranges->at(i) == ranges->at(i + 1) - 1) {
                 cut = i;
                 break;
             }
@@ -1412,8 +1413,8 @@ static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector& ra
                      &new_end_index,
                      &border);
 
-    jit::Label handle_rest;
-    jit::Label* above = &handle_rest;
+    Label handle_rest;
+    Label* above = &handle_rest;
     if (border == last + 1) {
         // We didn't find any section that started after the limit, so everything
         // above the border is one of the terminal labels.
@@ -1427,19 +1428,19 @@ static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector& ra
     MOZ_ASSERT(new_end_index < end_index);
     MOZ_ASSERT(new_end_index + 1 == new_start_index ||
                (new_end_index + 2 == new_start_index &&
-                border == ranges.at(new_end_index + 1)));
+                border == ranges->at(new_end_index + 1)));
     MOZ_ASSERT(min_char < border - 1);
     MOZ_ASSERT(border < max_char);
-    MOZ_ASSERT(ranges.at(new_end_index) < border);
-    MOZ_ASSERT(border < ranges.at(new_start_index) ||
-               (border == ranges.at(new_start_index) &&
+    MOZ_ASSERT(ranges->at(new_end_index) < border);
+    MOZ_ASSERT(border < ranges->at(new_start_index) ||
+               (border == ranges->at(new_start_index) &&
                 new_start_index == end_index &&
                 new_end_index == end_index - 1 &&
                 border == last + 1));
-    MOZ_ASSERT(new_start_index == 0 || border >= ranges.at(new_start_index - 1));
+    MOZ_ASSERT(new_start_index == 0 || border >= ranges->at(new_start_index - 1));
 
     masm->CheckCharacterGT(border - 1, above);
-    jit::Label dummy;
+    Label dummy;
     GenerateBranches(masm,
                      ranges,
                      start_index,
@@ -1467,19 +1468,19 @@ static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector& ra
 static void EmitCharClass(LifoAlloc* alloc,
                           RegExpMacroAssembler* macro_assembler,
                           RegExpCharacterClass* cc, bool latin1,
-                          jit::Label* on_failure, int cp_offset, bool check_offset,
+                          Label* on_failure, int cp_offset, bool check_offset,
                           bool preloaded) {
-    CharacterRangeVector& ranges = cc->ranges(alloc);
+    CharacterRangeVector* ranges = cc->ranges(alloc);
     if (!CharacterRange::IsCanonical(ranges)) {
         CharacterRange::Canonicalize(ranges);
     }
 
     int max_char = MaximumCharacter(latin1);
-    int range_count = ranges.length();
+    int range_count = ranges->length();
 
     int last_valid_range = range_count - 1;
     while (last_valid_range >= 0) {
-        CharacterRange& range = ranges.at(last_valid_range);
+        CharacterRange& range = ranges->at(last_valid_range);
         if (range.from() <= max_char) {
             break;
         }
@@ -1497,7 +1498,7 @@ static void EmitCharClass(LifoAlloc* alloc,
     }
 
     if (last_valid_range == 0 &&
-        ranges.at(0).IsEverything(max_char)) {
+        ranges->at(0).IsEverything(max_char)) {
         if (cc->is_negated()) {
             macro_assembler->JumpOrBacktrack(on_failure);
         } else {
@@ -1510,7 +1511,7 @@ static void EmitCharClass(LifoAlloc* alloc,
     }
     if (last_valid_range == 0 &&
         !cc->is_negated() &&
-        ranges[0].IsEverything(max_char)) {
+        ranges->at(0).IsEverything(max_char)) {
         // This is a common case hit by non-anchored expressions.
         if (check_offset) {
             macro_assembler->CheckPosition(cp_offset, on_failure);
@@ -1541,7 +1542,7 @@ static void EmitCharClass(LifoAlloc* alloc,
 
     range_boundaries->reserve(last_valid_range);
     for (int i = 0; i <= last_valid_range; i++) {
-        CharacterRange& range = ranges.at(i);
+        CharacterRange& range = ranges->at(i);
         if (range.from() == 0) {
             MOZ_ASSERT(i == 0);
             zeroth_entry_is_failure = !zeroth_entry_is_failure;
@@ -1555,9 +1556,9 @@ static void EmitCharClass(LifoAlloc* alloc,
         end_index--;
     }
 
-    jit::Label fall_through;
+    Label fall_through;
     GenerateBranches(macro_assembler,
-                     *range_boundaries,
+                     range_boundaries,
                      0,  // start_index.
                      end_index,
                      0,  // min_char.
@@ -1690,7 +1691,7 @@ int NegativeLookaheadChoiceNode::EatsAtLeast(int still_to_find,
     if (budget <= 0) return 0;
     // Alternative 0 is the negative lookahead, alternative 1 is what comes
     // afterwards.
-    RegExpNode* node = alternatives().at(1).node();
+    RegExpNode* node = alternatives()->at(1).node();
     return node->EatsAtLeast(still_to_find, budget - 1, not_at_start);
 }
 
@@ -1699,7 +1700,7 @@ void NegativeLookaheadChoiceNode::GetQuickCheckDetails(
         bool not_at_start) {
     // Alternative 0 is the negative lookahead, alternative 1 is what comes
     // afterwards.
-    RegExpNode* node = alternatives().at(1).node();
+    RegExpNode* node = alternatives()->at(1).node();
     return node->GetQuickCheckDetails(details, compiler, filled_in, not_at_start);
 }
 
@@ -1709,10 +1710,10 @@ int ChoiceNode::EatsAtLeastHelper(int still_to_find,
                                   bool not_at_start) {
     if (budget <= 0) return 0;
     int min = 100;
-    size_t choice_count = alternatives().length();
+    size_t choice_count = alternatives()->length();
     budget = (budget - 1) / choice_count;
     for (size_t i = 0; i < choice_count; i++) {
-        RegExpNode* node = alternatives().at(i).node();
+        RegExpNode* node = alternatives()->at(i).node();
         if (node == ignore_this_node) continue;
         int node_eats_at_least =
             node->EatsAtLeast(still_to_find, budget, not_at_start);
@@ -1772,7 +1773,7 @@ bool QuickCheckDetails::Rationalize(bool is_latin1) {
 bool RegExpNode::EmitQuickCheck(RegExpCompiler* compiler,
                                 Trace* trace,
                                 bool preload_has_checked_bounds,
-                                jit::Label* on_possible_success,
+                                Label* on_possible_success,
                                 QuickCheckDetails* details,
                                 bool fall_through_on_failure) {
     if (details->characters() == 0) return false;
@@ -1847,8 +1848,8 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
     int characters = details->characters();
     int char_mask = MaximumCharacter(compiler->latin1());
 
-    for (size_t k = 0; k < elements().length(); k++) {
-        TextElement elm = elements().at(k);
+    for (size_t k = 0; k < elements()->length(); k++) {
+        TextElement elm = elements()->at(k);
         if (elm.text_type() == TextElement::ATOM) {
             const CharacterVector& quarks = elm.atom()->data();
             for (size_t i = 0; i < (size_t) characters && i < quarks.length(); i++) {
@@ -1913,7 +1914,7 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
             QuickCheckDetails::Position* pos =
                 details->positions(characters_filled_in);
             RegExpCharacterClass* tree = elm.char_class();
-            const CharacterRangeVector& ranges = tree->ranges(alloc());
+            const CharacterRangeVector* ranges = tree->ranges(alloc());
             if (tree->is_negated()) {
                 // A quick check uses multi-character mask and compare.  There is no
                 // useful way to incorporate a negative char class into this scheme
@@ -1923,15 +1924,15 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                 pos->value = 0;
             } else {
                 size_t first_range = 0;
-                while (ranges.at(first_range).from() > char_mask) {
+                while (ranges->at(first_range).from() > char_mask) {
                     first_range++;
-                    if (first_range == ranges.length()) {
+                    if (first_range == ranges->length()) {
                         details->set_cannot_match();
                         pos->determines_perfectly = false;
                         return;
                     }
                 }
-                CharacterRange range = ranges.at(first_range);
+                CharacterRange range = ranges->at(first_range);
                 uc16 from = range.from();
                 uc16 to = range.to();
                 if (to > char_mask) {
@@ -1946,8 +1947,8 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                 }
                 uint32_t common_bits = ~SmearBitsRight(differing_bits);
                 uint32_t bits = (from & common_bits);
-                for (size_t i = first_range + 1; i < ranges.length(); i++) {
-                    CharacterRange range = ranges.at(i);
+                for (size_t i = first_range + 1; i < ranges->length(); i++) {
+                    CharacterRange range = ranges->at(i);
                     uc16 from = range.from();
                     uc16 to = range.to();
                     if (from > char_mask) continue;
@@ -2070,10 +2071,10 @@ RegExpNode* SeqRegExpNode::FilterSuccessor(int depth, bool ignore_case, bool uni
     return set_replacement(this);
 }
 
-static bool RangesContainLatin1Equivalents(const CharacterRangeVector& ranges, bool unicode) {
-    for (size_t i = 0; i < ranges.length(); i++) {
+static bool RangesContainLatin1Equivalents(CharacterRangeVector* ranges, bool unicode) {
+    for (size_t i = 0; i < ranges->length(); i++) {
         // TODO(dcarney): this could be a lot more efficient.
-        if (RangeContainsLatin1Equivalents(ranges.at(i), unicode)) return true;
+        if (RangeContainsLatin1Equivalents(ranges->at(i), unicode)) return true;
     }
     return false;
 }
@@ -2083,9 +2084,9 @@ RegExpNode* TextNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) {
     if (depth < 0) return this;
     MOZ_ASSERT(!info()->visited);
     VisitMarker marker(info());
-    int element_count = elements().length();
+    int element_count = elements()->length();
     for (int i = 0; i < element_count; i++) {
-        TextElement elm = elements().at(i);
+        TextElement elm = elements()->at(i);
         if (elm.text_type() == TextElement::ATOM) {
             CharacterVector& quarks = const_cast<CharacterVector&>(elm.atom()->data());
             for (size_t j = 0; j < quarks.length(); j++) {
@@ -2104,23 +2105,23 @@ RegExpNode* TextNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) {
             MOZ_ASSERT(elm.text_type() == TextElement::CHAR_CLASS);
             RegExpCharacterClass* cc = elm.char_class();
 
-            CharacterRangeVector& ranges = cc->ranges(alloc());
+            CharacterRangeVector* ranges = cc->ranges(alloc());
             if (!CharacterRange::IsCanonical(ranges))
                 CharacterRange::Canonicalize(ranges);
 
             // Now they are in order so we only need to look at the first.
-            int range_count = ranges.length();
+            int range_count = ranges->length();
             if (cc->is_negated()) {
                 if (range_count != 0 &&
-                    ranges.at(0).from() == 0 &&
-                    ranges.at(0).to() >= kMaxOneByteCharCode) {
+                    ranges->at(0).from() == 0 &&
+                    ranges->at(0).to() >= kMaxOneByteCharCode) {
                     // This will be handled in a later filter.
                     if (ignore_case && RangesContainLatin1Equivalents(ranges, unicode)) continue;
                     return set_replacement(nullptr);
                 }
             } else {
                 if (range_count == 0 ||
-                    ranges.at(0).from() > kMaxOneByteCharCode) {
+                    ranges->at(0).from() > kMaxOneByteCharCode) {
                     // This will be handled in a later filter.
                     if (ignore_case && RangesContainLatin1Equivalents(ranges, unicode)) continue;
                     return set_replacement(nullptr);
@@ -2154,10 +2155,10 @@ RegExpNode* ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) 
     if (depth < 0) return this;
     if (info()->visited) return this;
     VisitMarker marker(info());
-    int choice_count = alternatives().length();
+    int choice_count = alternatives()->length();
 
     for (int i = 0; i < choice_count; i++) {
-        const GuardedAlternative alternative = alternatives().at(i);
+        const GuardedAlternative alternative = alternatives()->at(i);
         if (alternative.guards() != nullptr && alternative.guards()->length() != 0) {
             set_replacement(this);
             return this;
@@ -2167,12 +2168,12 @@ RegExpNode* ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) 
     int surviving = 0;
     RegExpNode* survivor = nullptr;
     for (int i = 0; i < choice_count; i++) {
-        GuardedAlternative alternative = alternatives().at(i);
+        GuardedAlternative alternative = alternatives()->at(i);
         RegExpNode* replacement =
             alternative.node()->FilterLATIN1(depth - 1, ignore_case, unicode);
         MOZ_ASSERT(replacement != this);  // No missing EMPTY_MATCH_CHECK.
         if (replacement != nullptr) {
-            alternatives().at(i).set_node(replacement);
+            alternatives()->at(i).set_node(replacement);
             surviving++;
             survivor = replacement;
         }
@@ -2189,10 +2190,10 @@ RegExpNode* ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) 
     new_alternatives.reserve(surviving);
     for (int i = 0; i < choice_count; i++) {
         RegExpNode* replacement =
-            alternatives().at(i).node()->FilterLATIN1(depth - 1, ignore_case, unicode);
+            alternatives()->at(i).node()->FilterLATIN1(depth - 1, ignore_case, unicode);
         if (replacement != nullptr) {
-            alternatives().at(i).set_node(replacement);
-            new_alternatives.append(alternatives().at(i));
+            alternatives()->at(i).set_node(replacement);
+            new_alternatives.append(alternatives()->at(i));
         }
     }
     alternatives_ = Move(new_alternatives);
@@ -2207,17 +2208,17 @@ RegExpNode* NegativeLookaheadChoiceNode::FilterLATIN1(int depth,
     VisitMarker marker(info());
     // Alternative 0 is the negative lookahead, alternative 1 is what comes
     // afterwards.
-    RegExpNode* node = alternatives().at(1).node();
+    RegExpNode* node = alternatives()->at(1).node();
     RegExpNode* replacement = node->FilterLATIN1(depth - 1, ignore_case, unicode);
     if (replacement == nullptr) return set_replacement(nullptr);
-    alternatives().at(1).set_node(replacement);
+    alternatives()->at(1).set_node(replacement);
 
-    RegExpNode* neg_node = alternatives().at(0).node();
+    RegExpNode* neg_node = alternatives()->at(0).node();
     RegExpNode* neg_replacement = neg_node->FilterLATIN1(depth - 1, ignore_case, unicode);
     // If the negative lookahead is always going to fail then
     // we don't need to check it.
     if (neg_replacement == nullptr) return set_replacement(replacement);
-    alternatives().at(0).set_node(neg_replacement);
+    alternatives()->at(0).set_node(neg_replacement);
     return set_replacement(this);
 }
 
@@ -2251,15 +2252,15 @@ void ChoiceNode::GetQuickCheckDetails(QuickCheckDetails* details,
                                       int characters_filled_in,
                                       bool not_at_start) {
     not_at_start = (not_at_start || not_at_start_);
-    int choice_count = alternatives().length();
+    int choice_count = alternatives()->length();
     MOZ_ASSERT(choice_count > 0);
-    alternatives().at(0).node()->GetQuickCheckDetails(details,
-                                                   compiler,
-                                                   characters_filled_in,
-                                                   not_at_start);
+    alternatives()->at(0).node()->GetQuickCheckDetails(details,
+                                                       compiler,
+                                                       characters_filled_in,
+                                                       not_at_start);
     for (int i = 1; i < choice_count; i++) {
         QuickCheckDetails new_details(details->characters());
-        RegExpNode* node = alternatives().at(i).node();
+        RegExpNode* node = alternatives()->at(i).node();
         node->GetQuickCheckDetails(&new_details, compiler,
                                    characters_filled_in,
                                    not_at_start);
@@ -2270,8 +2271,8 @@ void ChoiceNode::GetQuickCheckDetails(QuickCheckDetails* details,
 
 // Check for [0-9A-Z_a-z].
 static void EmitWordCheck(RegExpMacroAssembler* assembler,
-                          jit::Label* word,
-                          jit::Label* non_word,
+                          Label* word,
+                          Label* non_word,
                           bool fall_through_on_word,
                           bool unicode_ignore_case) {
     if (!unicode_ignore_case &&
@@ -2313,7 +2314,7 @@ static void EmitHat(RegExpCompiler* compiler,
     Trace new_trace(*trace);
     new_trace.InvalidateCurrentCharacter();
 
-    jit::Label ok;
+    Label ok;
     if (new_trace.cp_offset() == 0) {
         // The start of input counts as a newline in this context, so skip to
         // ok if we are at the start.
@@ -2369,8 +2370,8 @@ void AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler, Trace* trace) {
     }
     bool at_boundary = (assertion_type_ == AssertionNode::AT_BOUNDARY);
     if (next_is_word_character == Trace::UNKNOWN) {
-        jit::Label before_non_word;
-        jit::Label before_word;
+        Label before_non_word;
+        Label before_word;
         if (trace->characters_preloaded() != 1) {
             assembler->LoadCurrentCharacter(trace->cp_offset(), &before_non_word);
         }
@@ -2379,7 +2380,7 @@ void AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler, Trace* trace) {
                       compiler->unicode() && compiler->ignore_case());
         // Next character is not a word character.
         assembler->Bind(&before_non_word);
-        jit::Label ok;
+        Label ok;
         BacktrackIfPrevious(compiler, trace, at_boundary ? kIsNonWord : kIsWord);
         assembler->JumpOrBacktrack(&ok);
 
@@ -2401,14 +2402,14 @@ void AssertionNode::BacktrackIfPrevious(RegExpCompiler* compiler,
     Trace new_trace(*trace);
     new_trace.InvalidateCurrentCharacter();
 
-    jit::Label fall_through, dummy;
+    Label fall_through, dummy;
 
-    jit::Label* non_word = backtrack_if_previous == kIsNonWord ?
-                           new_trace.backtrack() :
-                           &fall_through;
-    jit::Label* word = backtrack_if_previous == kIsNonWord ?
-                       &fall_through :
-                       new_trace.backtrack();
+    Label* non_word = backtrack_if_previous == kIsNonWord ?
+                      new_trace.backtrack() :
+                      &fall_through;
+    Label* word = backtrack_if_previous == kIsNonWord ?
+                  &fall_through :
+                  new_trace.backtrack();
 
     if (new_trace.cp_offset() == 0) {
         // The start of input counts as a non-word character, so the question is
@@ -2450,7 +2451,7 @@ EmitNotAfterLeadSurrogate(RegExpCompiler* compiler, RegExpNode* on_success, Trac
     Trace new_trace(*trace);
     new_trace.InvalidateCurrentCharacter();
 
-    jit::Label ok;
+    Label ok;
     if (new_trace.cp_offset() == 0)
         assembler->CheckAtStart(&ok);
 
@@ -2471,7 +2472,7 @@ EmitNotInSurrogatePair(RegExpCompiler* compiler, RegExpNode* on_success, Trace* 
 {
     RegExpMacroAssembler* assembler = compiler->macro_assembler();
 
-    jit::Label ok;
+    Label ok;
     assembler->CheckPosition(trace->cp_offset(), &ok);
 
     // We will be loading the next and previous characters into the current
@@ -2502,7 +2503,7 @@ void AssertionNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     RegExpMacroAssembler* assembler = compiler->macro_assembler();
     switch (assertion_type_) {
       case AT_END: {
-        jit::Label ok;
+        Label ok;
         assembler->CheckPosition(trace->cp_offset(), &ok);
         assembler->JumpOrBacktrack(trace->backtrack());
         assembler->Bind(&ok);
@@ -2603,11 +2604,11 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
                             int* checked_up_to) {
     RegExpMacroAssembler* assembler = compiler->macro_assembler();
     bool latin1 = compiler->latin1();
-    jit::Label* backtrack = trace->backtrack();
+    Label* backtrack = trace->backtrack();
     QuickCheckDetails* quick_check = trace->quick_check_performed();
-    int element_count = elements().length();
+    int element_count = elements()->length();
     for (int i = preloaded ? 0 : element_count - 1; i >= 0; i--) {
-        TextElement elm = elements().at(i);
+        TextElement elm = elements()->at(i);
         int cp_offset = trace->cp_offset() + elm.cp_offset();
         if (elm.text_type() == TextElement::ATOM) {
             const CharacterVector& quarks = elm.atom()->data();
@@ -2662,7 +2663,7 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
 }
 
 int TextNode::Length() {
-    TextElement elm = elements().last();
+    TextElement elm = elements()->last();
     MOZ_ASSERT(elm.cp_offset() >= 0);
     return elm.cp_offset() + elm.length();
 }
@@ -2758,12 +2759,12 @@ void Trace::AdvanceCurrentPositionInTrace(int by, RegExpCompiler* compiler) {
 }
 
 static bool
-CompareInverseRanges(const CharacterRangeVector& ranges, const int* special_class, size_t length);
+CompareInverseRanges(const CharacterRangeVector* ranges, const int* special_class, size_t length);
 
 void TextNode::MakeCaseIndependent(bool is_latin1, bool unicode) {
-    int element_count = elements().length();
+    int element_count = elements()->length();
     for (int i = 0; i < element_count; i++) {
-        TextElement elm = elements().at(i);
+        TextElement elm = elements()->at(i);
         if (elm.text_type() == TextElement::CHAR_CLASS) {
             RegExpCharacterClass* cc = elm.char_class();
 
@@ -2774,7 +2775,7 @@ void TextNode::MakeCaseIndependent(bool is_latin1, bool unicode) {
             // Similarly, there's nothing to do for the character class
             // containing all characters except line terminators and surrogates.
             // This one is added by UnicodeEverythingAtom.
-            CharacterRangeVector& ranges = cc->ranges(alloc());
+            CharacterRangeVector* ranges = cc->ranges(alloc());
             if (CompareInverseRanges(ranges,
                                      kLineTerminatorAndSurrogateRanges,
                                      kLineTerminatorAndSurrogateRangeCount))
@@ -2782,9 +2783,9 @@ void TextNode::MakeCaseIndependent(bool is_latin1, bool unicode) {
                 continue;
             }
 
-            int range_count = ranges.length();
+            int range_count = ranges->length();
             for (int j = 0; j < range_count; j++)
-                ranges[j].AddCaseEquivalents(is_latin1, unicode, &ranges);
+                ranges->at(j).AddCaseEquivalents(is_latin1, unicode, ranges);
         }
     }
 }
@@ -2793,19 +2794,19 @@ int TextNode::GreedyLoopTextLength() { return Length(); }
 
 RegExpNode* TextNode::GetSuccessorOfOmnivorousTextNode(
         RegExpCompiler* compiler) {
-    if (elements().length() != 1) return nullptr;
-    TextElement elm = elements().at(0);
+    if (elements()->length() != 1) return nullptr;
+    TextElement elm = elements()->at(0);
     if (elm.text_type() != TextElement::CHAR_CLASS) return nullptr;
     RegExpCharacterClass* node = elm.char_class();
-    CharacterRangeVector& ranges = node->ranges(alloc());
+    CharacterRangeVector* ranges = node->ranges(alloc());
     if (!CharacterRange::IsCanonical(ranges))
         CharacterRange::Canonicalize(ranges);
     if (node->is_negated()) {
-        return ranges.length() == 0 ? on_success() : nullptr;
+        return ranges->length() == 0 ? on_success() : nullptr;
     }
-    if (ranges.length() != 1) return nullptr;
+    if (ranges->length() != 1) return nullptr;
     uint32_t max_char = MaximumCharacter(compiler->latin1());
-    return ranges.at(0).IsEverything(max_char) ? on_success() : nullptr;
+    return ranges->at(0).IsEverything(max_char) ? on_success() : nullptr;
 }
 
 // Finds the fixed match length of a sequence of nodes that goes from
@@ -2850,7 +2851,7 @@ void LoopChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
     if (trace->stop_node() == this) {
         int text_length =
-            GreedyLoopTextLengthForAlternative(&(alternatives().at(0)));
+            GreedyLoopTextLengthForAlternative(&(alternatives()->at(0)));
         MOZ_ASSERT(text_length != kNodeIsTooComplexForGreedyLoops);
         // Update the counter-based backtracking info on the stack.  This is an
         // optimization for greedy loops (see below).
@@ -2896,9 +2897,9 @@ class irregexp::AlternativeGeneration {
         after(),
         quick_check_details() { }
 
-    jit::Label possible_success;
+    Label possible_success;
     bool expects_preload;
-    jit::Label after;
+    Label after;
     QuickCheckDetails quick_check_details;
 };
 
@@ -3126,7 +3127,7 @@ bool BoyerMooreLookahead::EmitSkipInstructions(RegExpMacroAssembler* masm) {
     }
 
     if (found_single_character) {
-        jit::Label cont, again;
+        Label cont, again;
         masm->Bind(&again);
         masm->LoadCurrentCharacter(max_lookahead, &cont, true);
         if (max_char_ > kSize) {
@@ -3153,7 +3154,7 @@ bool BoyerMooreLookahead::EmitSkipInstructions(RegExpMacroAssembler* masm) {
     int skip_distance = GetSkipTable(min_lookahead, max_lookahead, boolean_skip_table.get());
     MOZ_ASSERT(skip_distance != 0);
 
-    jit::Label cont, again;
+    Label cont, again;
     masm->Bind(&again);
     masm->LoadCurrentCharacter(max_lookahead, &cont, true);
     masm->CheckBitInTable(Move(boolean_skip_table), &cont);
@@ -3244,15 +3245,15 @@ bool BoyerMooreLookahead::EmitSkipInstructions(RegExpMacroAssembler* masm) {
 
 void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
-    size_t choice_count = alternatives().length();
+    size_t choice_count = alternatives()->length();
 
 #ifdef DEBUG
     for (size_t i = 0; i < choice_count - 1; i++) {
-        const GuardedAlternative& alternative = alternatives()[i];
+        const GuardedAlternative& alternative = alternatives()->at(i);
         const GuardVector* guards = alternative.guards();
         if (guards) {
             for (size_t j = 0; j < guards->length(); j++)
-                MOZ_ASSERT(!trace->mentions_reg((*guards)[j]->reg()));
+                MOZ_ASSERT(!trace->mentions_reg(guards->at(j)->reg()));
         }
     }
 #endif
@@ -3271,9 +3272,9 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
 
     Trace* current_trace = trace;
 
-    int text_length = GreedyLoopTextLengthForAlternative(&alternatives()[0]);
+    int text_length = GreedyLoopTextLengthForAlternative(&alternatives()->at(0));
     bool greedy_loop = false;
-    jit::Label greedy_loop_label;
+    Label greedy_loop_label;
     Trace counter_backtrack_trace;
     counter_backtrack_trace.set_backtrack(&greedy_loop_label);
     if (not_at_start()) counter_backtrack_trace.set_at_start(false);
@@ -3290,19 +3291,19 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
         MOZ_ASSERT(trace->stop_node() == nullptr);
         macro_assembler->PushCurrentPosition();
         current_trace = &counter_backtrack_trace;
-        jit::Label greedy_match_failed;
+        Label greedy_match_failed;
         Trace greedy_match_trace;
         if (not_at_start()) greedy_match_trace.set_at_start(false);
         greedy_match_trace.set_backtrack(&greedy_match_failed);
-        jit::Label loop_label;
+        Label loop_label;
         macro_assembler->Bind(&loop_label);
         greedy_match_trace.set_stop_node(this);
         greedy_match_trace.set_loop_label(&loop_label);
-        alternatives()[0].node()->Emit(compiler, &greedy_match_trace);
+        alternatives()->at(0).node()->Emit(compiler, &greedy_match_trace);
         macro_assembler->Bind(&greedy_match_failed);
     }
 
-    jit::Label second_choice;  // For use in greedy matches.
+    Label second_choice;  // For use in greedy matches.
     macro_assembler->Bind(&second_choice);
 
     size_t first_normal_choice = greedy_loop ? 1 : 0;
@@ -3314,7 +3315,7 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     bool skip_was_emitted = false;
 
     if (!greedy_loop && choice_count == 2) {
-        GuardedAlternative alt1 = alternatives()[1];
+        GuardedAlternative alt1 = alternatives()->at(1);
         if (!alt1.guards() || alt1.guards()->length() == 0) {
             RegExpNode* eats_anything_node = alt1.node();
             if (eats_anything_node->GetSuccessorOfOmnivorousTextNode(compiler) == this) {
@@ -3335,7 +3336,7 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
                     if (eats_at_least >= 1) {
                         BoyerMooreLookahead* bm =
                             alloc()->newInfallible<BoyerMooreLookahead>(alloc(), eats_at_least, compiler);
-                        GuardedAlternative alt0 = alternatives()[0];
+                        GuardedAlternative alt0 = alternatives()->at(0);
                         alt0.node()->FillInBMInfo(0, kRecursionBudget, bm, not_at_start);
                         skip_was_emitted = bm->EmitSkipInstructions(macro_assembler);
                     }
@@ -3362,7 +3363,7 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     // For now we just call all choices one after the other.  The idea ultimately
     // is to use the Dispatch table to try only the relevant ones.
     for (size_t i = first_normal_choice; i < choice_count; i++) {
-        GuardedAlternative alternative = alternatives()[i];
+        GuardedAlternative alternative = alternatives()->at(i);
         AlternativeGeneration* alt_gen = alt_gens.at(i);
         alt_gen->quick_check_details.set_characters(preload_characters);
         const GuardVector* guards = alternative.guards();
@@ -3452,23 +3453,21 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
         }
         EmitOutOfLineContinuation(compiler,
                                   &new_trace,
-                                  alternatives()[i],
+                                  alternatives()->at(i),
                                   alt_gen,
                                   preload_characters,
                                   alt_gens.at(i + 1)->expects_preload);
     }
 }
 
-void
-ChoiceNode::EmitOutOfLineContinuation(RegExpCompiler* compiler,
-                                      Trace* trace,
-                                      GuardedAlternative alternative,
-                                      AlternativeGeneration* alt_gen,
-                                      int preload_characters,
-                                      bool next_expects_preload)
+void ChoiceNode::EmitOutOfLineContinuation(RegExpCompiler* compiler,
+                                           Trace* trace,
+                                           GuardedAlternative alternative,
+                                           AlternativeGeneration* alt_gen,
+                                           int preload_characters,
+                                           bool next_expects_preload)
 {
-    if (!alt_gen->possible_success.used())
-        return;
+    if (!alt_gen->possible_success.used()) return;
 
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
     macro_assembler->Bind(&alt_gen->possible_success);
@@ -3479,7 +3478,7 @@ ChoiceNode::EmitOutOfLineContinuation(RegExpCompiler* compiler,
     const GuardVector* guards = alternative.guards();
     size_t guard_count = (guards == nullptr) ? 0 : guards->length();
     if (next_expects_preload) {
-        jit::Label reload_current_char;
+        Label reload_current_char;
         out_of_line_trace.set_backtrack(&reload_current_char);
         for (size_t j = 0; j < guard_count; j++) {
             GenerateGuard(macro_assembler, guards->at(j), &out_of_line_trace);
@@ -3575,7 +3574,7 @@ void ActionNode::Emit(RegExpCompiler* compiler, Trace* trace) {
         } else if (!trace->is_trivial()) {
             trace->Flush(compiler, this);
         } else {
-            jit::Label skip_empty_check;
+            Label skip_empty_check;
             // If we have a minimum number of repetitions we check the current
             // number first and skip the empty check if it's not enough.
             if (has_minimum) {
@@ -3606,7 +3605,7 @@ void ActionNode::Emit(RegExpCompiler* compiler, Trace* trace) {
             return;
         }
         int clear_registers_from = data_.u_submatch.clear_register_from;
-        jit::Label clear_registers_backtrack;
+        Label clear_registers_backtrack;
         Trace new_trace = *trace;
         new_trace.set_backtrack(&clear_registers_backtrack);
         on_success()->Emit(compiler, &new_trace);
@@ -3664,18 +3663,18 @@ RegExpNode* RegExpText::ToNode(RegExpCompiler* compiler,
     return compiler->alloc()->newInfallible<TextNode>(&elements_, on_success);
 }
 
-static bool CompareInverseRanges(const CharacterRangeVector& ranges,
+static bool CompareInverseRanges(const CharacterRangeVector* ranges,
                                  const int* special_class,
                                  size_t length) {
     length--;  // Remove final marker.
     MOZ_ASSERT(special_class[length] == kRangeEndMarker);
-    MOZ_ASSERT(ranges.length() != 0);
+    MOZ_ASSERT(ranges->length() != 0);
     MOZ_ASSERT(length != 0);
     MOZ_ASSERT(special_class[0] != 0);
-    if (ranges.length() != (length >> 1) + 1) {
+    if (ranges->length() != (length >> 1) + 1) {
         return false;
     }
-    CharacterRange range = ranges.at(0);
+    CharacterRange range = ranges->at(0);
     if (range.from() != 0) {
         return false;
     }
@@ -3683,7 +3682,7 @@ static bool CompareInverseRanges(const CharacterRangeVector& ranges,
         if (special_class[i] != (range.to() + 1)) {
             return false;
         }
-        range = ranges.at((i >> 1) + 1);
+        range = ranges->at((i >> 1) + 1);
         if (special_class[i+1] != range.from()) {
             return false;
         }
@@ -3694,16 +3693,16 @@ static bool CompareInverseRanges(const CharacterRangeVector& ranges,
     return true;
 }
 
-static bool CompareRanges(const CharacterRangeVector& ranges,
+static bool CompareRanges(const CharacterRangeVector* ranges,
                           const int* special_class,
                           size_t length) {
     length--;  // Remove final marker.
     MOZ_ASSERT(special_class[length] == kRangeEndMarker);
-    if (ranges.length() * 2 != length) {
+    if (ranges->length() * 2 != length) {
         return false;
     }
     for (size_t i = 0; i < length; i += 2) {
-        CharacterRange range = ranges[i >> 1];
+        CharacterRange range = ranges->at(i >> 1);
         if (range.from() != special_class[i] ||
             range.to() != special_class[i + 1] - 1) {
             return false;
@@ -3762,12 +3761,12 @@ RegExpNode* RegExpDisjunction::ToNode(RegExpCompiler* compiler,
     if (!compiler->CheckOverRecursed())
         return on_success;
 
-    const RegExpTreeVector& alternatives = this->alternatives();
-    size_t length = alternatives.length();
+    const RegExpTreeVector* alternatives = this->alternatives();
+    size_t length = alternatives->length();
     ChoiceNode* result = compiler->alloc()->newInfallible<ChoiceNode>(compiler->alloc(), length);
     for (size_t i = 0; i < length && !compiler->isRegExpTooBig(); i++) {
-        GuardedAlternative alternative(alternatives.at(i)->ToNode(compiler,
-                                                                  on_success));
+        GuardedAlternative alternative(alternatives->at(i)->ToNode(compiler,
+                                                                   on_success));
         result->AddAlternative(alternative);
     }
     return result;
@@ -4110,10 +4109,10 @@ RegExpNode* RegExpAlternative::ToNode(RegExpCompiler* compiler,
     if (!compiler->CheckOverRecursed())
         return on_success;
 
-    const RegExpTreeVector& children = nodes();
+    const RegExpTreeVector* children = nodes();
     RegExpNode* current = on_success;
-    for (int i = children.length() - 1; i >= 0 && !compiler->isRegExpTooBig(); i--)
-        current = children.at(i)->ToNode(compiler, current);
+    for (int i = children->length() - 1; i >= 0 && !compiler->isRegExpTooBig(); i--)
+        current = children->at(i)->ToNode(compiler, current);
     return current;
 }
 
@@ -4276,12 +4275,12 @@ CharacterRange::AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeV
     }
 }
 
-bool CharacterRange::IsCanonical(const CharacterRangeVector& ranges) {
-    int n = ranges.length();
+bool CharacterRange::IsCanonical(const CharacterRangeVector* ranges) {
+    int n = ranges->length();
     if (n <= 1) return true;
-    int max = ranges.at(0).to();
+    int max = ranges->at(0).to();
     for (int i = 1; i < n; i++) {
-        CharacterRange next_range = ranges.at(i);
+        CharacterRange next_range = ranges->at(i);
         if (next_range.from() <= max + 1) return false;
         max = next_range.to();
     }
@@ -4290,23 +4289,23 @@ bool CharacterRange::IsCanonical(const CharacterRangeVector& ranges) {
 
 // Move a number of elements in a zonelist to another position
 // in the same list. Handles overlapping source and target areas.
-static void MoveRanges(CharacterRangeVector& list,
+static void MoveRanges(CharacterRangeVector* list,
                        int from,
                        int to,
                        int count) {
     // Ranges are potentially overlapping.
     if (from < to) {
         for (int i = count - 1; i >= 0; i--) {
-            list.at(to + i) = list.at(from + i);
+            list->at(to + i) = list->at(from + i);
         }
     } else {
         for (int i = 0; i < count; i++) {
-            list.at(to + i) = list.at(from + i);
+            list->at(to + i) = list->at(from + i);
         }
     }
 }
 
-static int InsertRangeInCanonicalList(CharacterRangeVector& list,
+static int InsertRangeInCanonicalList(CharacterRangeVector* list,
                                       int count,
                                       CharacterRange insert) {
     // Inserts a range into list[0..count[, which must be sorted
@@ -4319,7 +4318,7 @@ static int InsertRangeInCanonicalList(CharacterRangeVector& list,
     int start_pos = 0;
     int end_pos = count;
     for (int i = count - 1; i >= 0; i--) {
-        CharacterRange current = list.at(i);
+        CharacterRange current = list->at(i);
         if (current.from() > to + 1) {
             end_pos = i;
         } else if (current.to() + 1 < from) {
@@ -4340,38 +4339,38 @@ static int InsertRangeInCanonicalList(CharacterRangeVector& list,
         if (start_pos < count) {
             MoveRanges(list, start_pos, start_pos + 1, count - start_pos);
         }
-        list.at(start_pos) = insert;
+        list->at(start_pos) = insert;
         return count + 1;
     }
     if (start_pos + 1 == end_pos) {
         // Replace single existing range at position start_pos.
-        CharacterRange to_replace = list.at(start_pos);
+        CharacterRange to_replace = list->at(start_pos);
         int new_from = Min(to_replace.from(), from);
         int new_to = Max(to_replace.to(), to);
-        list.at(start_pos) = CharacterRange(new_from, new_to);
+        list->at(start_pos) = CharacterRange(new_from, new_to);
         return count;
     }
     // Replace a number of existing ranges from start_pos to end_pos - 1.
     // Move the remaining ranges down.
 
-    int new_from = Min(list.at(start_pos).from(), from);
-    int new_to = Max(list.at(end_pos - 1).to(), to);
+    int new_from = Min(list->at(start_pos).from(), from);
+    int new_to = Max(list->at(end_pos - 1).to(), to);
     if (end_pos < count) {
         MoveRanges(list, end_pos, start_pos + 1, count - end_pos);
     }
-    list.at(start_pos) = CharacterRange(new_from, new_to);
+    list->at(start_pos) = CharacterRange(new_from, new_to);
     return count - (end_pos - start_pos) + 1;
 }
 
-void CharacterRange::Canonicalize(CharacterRangeVector& character_ranges) {
-    if (character_ranges.length() <= 1) return;
+void CharacterRange::Canonicalize(CharacterRangeVector* character_ranges) {
+    if (character_ranges->length() <= 1) return;
     // Check whether ranges are already canonical (increasing, non-overlapping,
     // non-adjacent).
-    int n = character_ranges.length();
-    int max = character_ranges.at(0).to();
+    int n = character_ranges->length();
+    int max = character_ranges->at(0).to();
     int i = 1;
     while (i < n) {
-        CharacterRange current = character_ranges.at(i);
+        CharacterRange current = character_ranges->at(i);
         if (current.from() <= max + 1) {
             break;
         }
@@ -4391,12 +4390,12 @@ void CharacterRange::Canonicalize(CharacterRangeVector& character_ranges) {
     do {
         num_canonical = InsertRangeInCanonicalList(character_ranges,
                                                    num_canonical,
-                                                   character_ranges.at(read));
+                                                   character_ranges->at(read));
         read++;
     } while (read < n);
 
-    while (character_ranges.length() > num_canonical)
-        character_ranges.popBack();
+    while (character_ranges->length() > num_canonical)
+        character_ranges->popBack();
 
     MOZ_ASSERT(CharacterRange::IsCanonical(character_ranges));
 }
@@ -4452,12 +4451,12 @@ void Analysis::VisitEnd(EndNode* that) {
 }
 
 void TextNode::CalculateOffsets() {
-    int element_count = elements().length();
+    int element_count = elements()->length();
     // Set up the offsets of the elements relative to the start.  This is a fixed
     // quantity since a TextNode can only contain fixed-width things.
     int cp_offset = 0;
     for (int i = 0; i < element_count; i++) {
-        TextElement& elm = elements().at(i);
+        TextElement& elm = elements()->at(i);
         elm.set_cp_offset(cp_offset);
         cp_offset += elm.length();
     }
@@ -4485,8 +4484,8 @@ void Analysis::VisitAction(ActionNode* that) {
 
 void Analysis::VisitChoice(ChoiceNode* that) {
     NodeInfo* info = that->info();
-    for (size_t i = 0; i < that->alternatives().length(); i++) {
-        RegExpNode* node = that->alternatives().at(i).node();
+    for (size_t i = 0; i < that->alternatives()->length(); i++) {
+        RegExpNode* node = that->alternatives()->at(i).node();
         EnsureAnalyzed(node);
         if (has_failed()) return;
 
@@ -4498,8 +4497,8 @@ void Analysis::VisitChoice(ChoiceNode* that) {
 
 void Analysis::VisitLoopChoice(LoopChoiceNode* that) {
     NodeInfo* info = that->info();
-    for (size_t i = 0; i < that->alternatives().length(); i++) {
-        RegExpNode* node = that->alternatives().at(i).node();
+    for (size_t i = 0; i < that->alternatives()->length(); i++) {
+        RegExpNode* node = that->alternatives()->at(i).node();
         if (node != that->loop_node()) {
             EnsureAnalyzed(node);
             if (has_failed()) return;
@@ -4539,10 +4538,10 @@ bool ChoiceNode::FillInBMInfo(int offset, int budget,
     if (!bm->CheckOverRecursed())
         return false;
 
-    const GuardedAlternativeVector& alts = alternatives();
-    budget = (budget - 1) / alts.length();
-    for (size_t i = 0; i < alts.length(); i++) {
-        const GuardedAlternative& alt = alts.at(i);
+    GuardedAlternativeVector* alts = alternatives();
+    budget = (budget - 1) / alts->length();
+    for (size_t i = 0; i < alts->length(); i++) {
+        const GuardedAlternative& alt = alts->at(i);
         if (alt.guards() != nullptr && alt.guards()->length() != 0) {
             bm->SetRest(offset);  // Give up trying to fill in info.
             SaveBMInfo(bm, not_at_start, offset);
@@ -4563,12 +4562,12 @@ bool TextNode::FillInBMInfo(int initial_offset, int budget,
     if (initial_offset >= bm->length()) return true;
     int offset = initial_offset;
     int max_char = bm->max_char();
-    for (size_t i = 0; i < elements().length(); i++) {
+    for (size_t i = 0; i < elements()->length(); i++) {
         if (offset >= bm->length()) {
             if (initial_offset == 0) set_bm_info(not_at_start, bm);
             return true;
         }
-        TextElement text = elements().at(i);
+        TextElement text = elements()->at(i);
         if (text.text_type() == TextElement::ATOM) {
             RegExpAtom* atom = text.atom();
             for (int j = 0; j < atom->length(); j++, offset++) {
@@ -4592,12 +4591,12 @@ bool TextNode::FillInBMInfo(int initial_offset, int budget,
         } else {
             MOZ_ASSERT(TextElement::CHAR_CLASS == text.text_type());
             RegExpCharacterClass* char_class = text.char_class();
-            const CharacterRangeVector& ranges = char_class->ranges(alloc());
+            const CharacterRangeVector* ranges = char_class->ranges(alloc());
             if (char_class->is_negated()) {
                 bm->SetAll(offset);
             } else {
-                for (size_t k = 0; k < ranges.length(); k++) {
-                    const CharacterRange& range = ranges.at(k);
+                for (size_t k = 0; k < ranges->length(); k++) {
+                    const CharacterRange& range = ranges->at(k);
                     if (range.from() > max_char) continue;
                     int to = Min(max_char, static_cast<int>(range.to()));
                     bm->SetInterval(offset, Interval(range.from(), to));
@@ -4641,7 +4640,7 @@ NegativeLookaheadChoiceNode::FillInBMInfo(int offset,
     if (!bm->CheckOverRecursed())
         return false;
 
-    if (!alternatives()[1].node()->FillInBMInfo(offset, budget - 1, bm, not_at_start))
+    if (!alternatives()->at(1).node()->FillInBMInfo(offset, budget - 1, bm, not_at_start))
         return false;
     if (offset == 0)
         set_bm_info(not_at_start, bm);

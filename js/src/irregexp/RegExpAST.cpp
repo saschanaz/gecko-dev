@@ -52,10 +52,10 @@ FOR_EACH_REG_EXP_TREE_TYPE(MAKE_TYPE_CASE)
 FOR_EACH_REG_EXP_TREE_TYPE(MAKE_TYPE_CASE)
 #undef MAKE_TYPE_CASE
 
-static Interval ListCaptureRegisters(const RegExpTreeVector& children) {
+static Interval ListCaptureRegisters(const RegExpTreeVector* children) {
     Interval result = Interval::Empty();
-    for (size_t i = 0; i < children.length(); i++)
-        result = result.Union(children.at(i)->CaptureRegisters());
+    for (size_t i = 0; i < children->length(); i++)
+        result = result.Union(children->at(i)->CaptureRegisters());
     return result;
 }
 
@@ -89,9 +89,9 @@ bool RegExpAssertion::IsAnchoredAtEnd() {
 }
 
 bool RegExpAlternative::IsAnchoredAtStart() {
-    const RegExpTreeVector& nodes = this->nodes();
-    for (size_t i = 0; i < nodes.length(); i++) {
-        RegExpTree* node = nodes.at(i);
+    const RegExpTreeVector* nodes = this->nodes();
+    for (size_t i = 0; i < nodes->length(); i++) {
+        RegExpTree* node = nodes->at(i);
         if (node->IsAnchoredAtStart()) {
             return true;
         }
@@ -103,9 +103,9 @@ bool RegExpAlternative::IsAnchoredAtStart() {
 }
 
 bool RegExpAlternative::IsAnchoredAtEnd() {
-    const RegExpTreeVector& nodes = this->nodes();
-    for (int i = nodes.length() - 1; i >= 0; i--) {
-        RegExpTree* node = nodes.at(i);
+    const RegExpTreeVector* nodes = this->nodes();
+    for (int i = nodes->length() - 1; i >= 0; i--) {
+        RegExpTree* node = nodes->at(i);
         if (node->IsAnchoredAtEnd()) {
             return true;
         }
@@ -117,17 +117,17 @@ bool RegExpAlternative::IsAnchoredAtEnd() {
 }
 
 bool RegExpDisjunction::IsAnchoredAtStart() {
-    const RegExpTreeVector& alternatives = this->alternatives();
-    for (size_t i = 0; i < alternatives.length(); i++) {
-        if (!alternatives.at(i)->IsAnchoredAtStart()) return false;
+    const RegExpTreeVector* alternatives = this->alternatives();
+    for (size_t i = 0; i < alternatives->length(); i++) {
+        if (!alternatives->at(i)->IsAnchoredAtStart()) return false;
     }
     return true;
 }
 
 bool RegExpDisjunction::IsAnchoredAtEnd() {
-    const RegExpTreeVector& alternatives = this->alternatives();
-    for (size_t i = 0; i < alternatives.length(); i++) {
-        if (!alternatives.at(i)->IsAnchoredAtEnd()) return false;
+    const RegExpTreeVector* alternatives = this->alternatives();
+    for (size_t i = 0; i < alternatives->length(); i++) {
+        if (!alternatives->at(i)->IsAnchoredAtEnd()) return false;
     }
     return true;
 }
@@ -177,12 +177,12 @@ RegExpAlternative::RegExpAlternative(RegExpTreeVector* nodes)
 
 // ----------------------------------------------------------------------------
 
-CharacterRangeVector&
+CharacterRangeVector*
 CharacterSet::ranges(LifoAlloc* alloc)
 {
     if (ranges_ == nullptr) {
         ranges_ = alloc->newInfallible<CharacterRangeVector>(*alloc);
         CharacterRange::AddClassEscape(alloc, standard_set_type_, ranges_);
     }
-    return *ranges_;
+    return ranges_;
 }

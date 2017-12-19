@@ -274,7 +274,8 @@ class RegExpNode {
 
     // Only returns the successor for a text node of length 1 that matches any
     // character and that has no guards on it.
-    virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(RegExpCompiler* compiler) {
+    virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
+            RegExpCompiler* compiler) {
         return nullptr;
     }
 
@@ -481,7 +482,7 @@ class TextNode : public SeqRegExpNode {
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    TextElementVector& elements() { return *elements_; }
+    TextElementVector* elements() { return elements_; }
     void MakeCaseIndependent(bool is_latin1, bool unicode);
     virtual int GreedyLoopTextLength();
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
@@ -571,8 +572,7 @@ class AssertionNode : public SeqRegExpNode {
     AssertionType assertion_type_;
 };
 
-class BackReferenceNode : public SeqRegExpNode
-{
+class BackReferenceNode : public SeqRegExpNode {
   public:
     BackReferenceNode(int start_reg,
                       int end_reg,
@@ -606,8 +606,7 @@ class EndNode : public RegExpNode {
   public:
     enum Action { ACCEPT, BACKTRACK, NEGATIVE_SUBMATCH_SUCCESS };
 
-    explicit EndNode(LifoAlloc* alloc, Action action)
-      : RegExpNode(alloc), action_(action) {}
+    EndNode(LifoAlloc* alloc, Action action) : RegExpNode(alloc), action_(action) {}
 
     virtual void Accept(NodeVisitor* visitor);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
@@ -707,7 +706,7 @@ class ChoiceNode : public RegExpNode {
         alternatives_.append(node);
     }
 
-    GuardedAlternativeVector& alternatives() { return alternatives_; }
+    GuardedAlternativeVector* alternatives() { return &alternatives_; }
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
     virtual int EatsAtLeast(int still_to_find, int budget, bool not_at_start);
     int EatsAtLeastHelper(int still_to_find,
@@ -982,7 +981,7 @@ class Trace {
     class DeferredAction {
       public:
         DeferredAction(ActionNode::ActionType action_type, int reg)
-          : action_type_(action_type), reg_(reg), next_(nullptr) {}
+          : action_type_(action_type), reg_(reg), next_(nullptr) { }
 
         DeferredAction* next() { return next_; }
         bool Mentions(int reg);
