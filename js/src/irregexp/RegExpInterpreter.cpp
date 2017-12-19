@@ -101,16 +101,56 @@ class MOZ_STACK_CLASS RegExpStackCursor
     int32_t* base() { return (int32_t*) stack.base(); }
 };
 
-static int32_t
-Load32Aligned(const uint8_t* pc)
-{
+template <typename CharT>
+inline int CompareChars(const CharT* lhs, const CharT* rhs, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (int32_t cmp = lhs[i] - rhs[i])
+            return cmp;
+    }
+    return 0;
+}
+
+template <>
+inline int CompareChars(const Latin1Char* lhs, const Latin1Char* rhs, size_t count) {
+    return memcmp(lhs, rhs, count);
+}
+
+static bool BackRefMatchesNoCase(int from, int current,
+                                 int len, const char16_t* subject,
+                                 bool unicode) {
+    size_t length = len * sizeof(char16_t);
+    return unicode
+           ? CaseInsensitiveCompareUCStrings(subject + from, subject + current, length)
+           : CaseInsensitiveCompareStrings(subject + from, subject + current, length);
+}
+
+static bool BackRefMatchesNoCase(int from, int current,
+                                 int len, const Latin1Char* subject,
+                                 bool unicode) {
+    // For Latin1 characters the unicode flag makes no difference.
+    for (int i = 0; i < len; i++) {
+        unsigned int old_char = subject[from++];
+        unsigned int new_char = subject[current++];
+        if (old_char == new_char) continue;
+        // Convert both characters to lower case.
+        old_char |= 0x20;
+        new_char |= 0x20;
+        if (old_char != new_char) return false;
+        // Not letters in the ASCII range and Latin-1 range.
+        if (!(old_char - 'a' <= 'z' - 'a') &&
+            !(old_char - 224 <= 254 - 224 && old_char != 247)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int32_t Load32Aligned(const uint8_t* pc) {
     DCHECK((reinterpret_cast<uintptr_t>(pc) & 3) == 0);
     return *reinterpret_cast<const int32_t*>(pc);
 }
 
-static int32_t
-Load16Aligned(const uint8_t* pc)
-{
+static int32_t Load16Aligned(const uint8_t* pc) {
     DCHECK((reinterpret_cast<uintptr_t>(pc) & 1) == 0);
     return *reinterpret_cast<const uint16_t*>(pc);
 }
@@ -435,22 +475,12 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
           BYTECODE(CHECK_NOT_BACK_REF) {
             int from = registers[insn >> BYTECODE_SHIFT];
             int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
-            if (from < 0 || len <= 0) {
-                pc += BC_CHECK_NOT_BACK_REF_LENGTH;
-                break;
-            }
-            if (current + len > length) {
-                pc = code_base + Load32Aligned(pc + 4);
-                break;
-            } else {
-                int i;
-                for (i = 0; i < len; i++) {
-                    if (subject[from + i] != subject[current + i]) {
-                        pc = code_base + Load32Aligned(pc + 4);
-                        break;
-                    }
+            if (from >= 0 && len > 0) {
+                if (current + len > length ||
+                    ::CompareChars(subject + from, subject + current, len) != 0) {
+                    pc = code_base + Load32Aligned(pc + 4);
+                    break;
                 }
-                if (i < len) break;
                 current += len;
             }
             pc += BC_CHECK_NOT_BACK_REF_LENGTH;
@@ -459,44 +489,22 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
           BYTECODE(CHECK_NOT_BACK_REF_BACKWARD) {
             MOZ_CRASH("backward reading not implemented");
           }
+          BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_UNICODE)
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE) {
+            bool unicode =
+                (insn & BYTECODE_MASK) == BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE;
             int from = registers[insn >> BYTECODE_SHIFT];
             int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
-            if (from < 0 || len <= 0) {
-                pc += BC_CHECK_NOT_BACK_REF_NO_CASE_LENGTH;
-                break;
-            }
-            if (current + len > length) {
-                pc = code_base + Load32Aligned(pc + 4);
-                break;
-            }
-            if (CaseInsensitiveCompareStrings(subject + from, subject + current, len * sizeof(CharT))) {
+            if (from >= 0 && len > 0) {
+                if (current + len > length ||
+                    !BackRefMatchesNoCase(from, current, len, subject,
+                                          unicode)) {
+                    pc = code_base + Load32Aligned(pc + 4);
+                    break;
+                }
                 current += len;
-                pc += BC_CHECK_NOT_BACK_REF_NO_CASE_LENGTH;
-            } else {
-                pc = code_base + Load32Aligned(pc + 4);
             }
-            break;
-          }
-          BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_UNICODE) {
-            int from = registers[insn >> BYTECODE_SHIFT];
-            int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
-            if (from < 0 || len <= 0) {
-                pc += BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE_LENGTH;
-                break;
-            }
-            if (current + len > length) {
-                pc = code_base + Load32Aligned(pc + 4);
-                break;
-            }
-            if (CaseInsensitiveCompareUCStrings(subject + from, subject + current,
-                                                len * sizeof(CharT)))
-            {
-                current += len;
-                pc += BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE_LENGTH;
-            } else {
-                pc = code_base + Load32Aligned(pc + 4);
-            }
+            pc += BC_CHECK_NOT_BACK_REF_NO_CASE_LENGTH;
             break;
           }
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_UNICODE_BACKWARD)
