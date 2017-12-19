@@ -221,11 +221,9 @@ class RegExpParser {
     // Checks whether the following is a length-digit hexadecimal number,
     // and sets the value if it is.
     bool ParseHexEscape(int length, uc32* value);
-    bool ParseUnicodeEscape(uc32* value);
+    bool ParseUnicodeEscape(uc32* value, bool* parsed);
     bool ParseUnlimitedLengthHexNumber(int max_value, uc32* value);
 
-    bool ParseBracedHexEscape(widechar* value);
-    bool ParseTrailSurrogate(widechar* value);
     bool ParseRawSurrogatePair(char16_t* lead, char16_t* trail);
 
     uc32 ParseOctalLiteral();

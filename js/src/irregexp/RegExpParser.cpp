@@ -63,6 +63,18 @@ IsDecimalDigit(widechar c)
     return IsInRange(c, '0', '9');
 }
 
+// Returns the value (0 .. 15) of a hexadecimal character c.
+// If c is not a legal hexadecimal character, returns a value < 0.
+inline int
+HexValue(uint32_t c)
+{
+    c -= '0';
+    if (static_cast<unsigned>(c) <= 9) return c;
+    c = (c | 0x20) - ('a' - '0');  // detect 0x11..0x16 and 0x31..0x36.
+    if (static_cast<unsigned>(c) <= 5) return c + 10;
+    return -1;
+}
+
 // ----------------------------------------------------------------------------
 // SpiderMonkey implementation for Unicode RegExps
 
@@ -468,40 +480,6 @@ UnicodeRangesAtom(LifoAlloc* alloc,
     return builder->ToRegExp();
 }
 
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, widechar* value)
-{
-    MOZ_ASSERT(*char_class == kNoCharClass);
-    widechar first = current();
-    if (first == '\\') {
-        switch (Next()) {
-          case 'w': case 'W': case 'd': case 'D': case 's': case 'S': {
-            *char_class = Next();
-            Advance(2);
-            return true;
-          }
-          case kEndMarker:
-            return ReportError(JSMSG_ESCAPE_AT_END_OF_REGEXP);
-          default:
-            if (!ParseClassCharacterEscape(value))
-                return false;
-            return true;
-        }
-    } else {
-        if (unicode_) {
-            char16_t lead, trail;
-            if (ParseRawSurrogatePair(&lead, &trail)) {
-                *value = unicode::UTF16Decode(lead, trail);
-                return true;
-            }
-        }
-        Advance();
-        *value = first;
-        return true;
-    }
-}
-
 static inline RegExpTree*
 CaseFoldingSurrogatePairAtom(LifoAlloc* alloc, char16_t lead, char16_t trail, int32_t diff)
 {
@@ -827,9 +805,6 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             builder = state->builder();
 
             builder->AddAtom(body);
-
-            if (unicode_ && (group_type == POSITIVE_LOOKAROUND || group_type == NEGATIVE_LOOKAROUND))
-                continue;
             // For compatibility with JSC and ES3, we allow quantifiers after
             // lookaheads, and break in all cases.
             break;
@@ -865,15 +840,19 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
           }
           case '.': {
             Advance();
-            // Everything except \x0a, \x0d, \u2028 and \u2029
             if (unicode_) {
                 builder->AddAtom(UnicodeEverythingAtom(zone(), ignore_case()));
                 break;
             }
-            CharacterRangeVector* ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
+
+            CharacterRangeVector* ranges =
+                zone_->newInfallible<CharacterRangeVector>(*zone());
+
+            // Everything except \x0a, \x0d, \u2028 and \u2029
             CharacterRange::AddClassEscape('.', ranges, zone());
-            RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges);
-            builder->AddAtom(atom);
+
+            RegExpCharacterClass* cc = zone_->newInfallible<RegExpCharacterClass>(ranges);
+            builder->AddCharacterClass(cc);
             break;
           }
           case '(': {
@@ -916,10 +895,10 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             continue;
           }
           case '[': {
-            RegExpTree* atom = ParseCharacterClass();
-            if (!atom)
+            RegExpTree* cc = ParseCharacterClass();
+            if (!cc)
                 return nullptr;
-            builder->AddAtom(atom);
+            builder->AddAtom(cc);
             break;
           }
             // Atom ::
@@ -1076,88 +1055,57 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
               }
               case 'u': {
                 Advance(2);
-                widechar value;
-                if (unicode_) {
-                    if (current() == '{') {
-                        if (!ParseBracedHexEscape(&value))
-                            return nullptr;
-                        if (unicode::IsLeadSurrogate(value)) {
-                            builder->AddAtom(LeadSurrogateAtom(zone(), value, ignore_case()));
-                        } else if (unicode::IsTrailSurrogate(value)) {
-                            builder->AddAtom(TrailSurrogateAtom(zone(), value, ignore_case()));
-                        } else if (value >= unicode::NonBMPMin) {
-                            char16_t lead, trail;
-                            unicode::UTF16Encode(value, &lead, &trail);
-                            builder->AddAtom(SurrogatePairAtom(zone(), lead, trail,
-                                                               ignore_case_));
-                        } else {
-                            builder->AddCharacter(value);
-                        }
-                    } else if (ParseHexEscape(4, &value)) {
-                        if (unicode::IsLeadSurrogate(value)) {
-                            widechar trail;
-                            if (ParseTrailSurrogate(&trail)) {
-                                builder->AddAtom(SurrogatePairAtom(zone(), value, trail,
-                                                                   ignore_case_));
-                            } else {
-                                builder->AddAtom(LeadSurrogateAtom(zone(), value, ignore_case()));
-                            }
-                        } else if (unicode::IsTrailSurrogate(value)) {
-                            builder->AddAtom(TrailSurrogateAtom(zone(), value, ignore_case()));
-                        } else {
-                            builder->AddCharacter(value);
-                        }
-                    } else {
-                        return ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-                    }
-                    break;
-                }
-                if (ParseHexEscape(4, &value)) {
-                    builder->AddCharacter(value);
-                } else {
+                uc32 value;
+                bool parsed;
+                if (!ParseUnicodeEscape(&value, &parsed))
+                    return nullptr;
+                if (parsed) {
+                    builder->AddEscapedUnicodeCharacter(value);
+                } else if (!unicode()) {
                     builder->AddCharacter('u');
+                } else {
+                    // With /u, invalid escapes are not treated as identity escapes.
+                    return ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
                 }
                 break;
               }
               default:
-                // Identity escape.
-                if (unicode_ && !IsSyntaxCharacterOrSlash(Next()))
+                Advance();
+                // With /u, no identity escapes except for syntax characters
+                // are allowed. Otherwise, all identity escapes are allowed.
+                if (!unicode() || IsSyntaxCharacterOrSlash(current())) {
+                    builder->AddCharacter(current());
+                    Advance();
+                } else {
                     return ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
-                builder->AddCharacter(Next());
-                Advance(2);
+                }
                 break;
             }
             break;
           case '{': {
-            if (unicode_)
-                return ReportError(JSMSG_RAW_BRACE_IN_REGEP);
             int dummy;
             bool parsed = ParseIntervalQuantifier(&dummy, &dummy);
             if (parsed) return ReportError(JSMSG_NOTHING_TO_REPEAT);
             MOZ_FALLTHROUGH;
           }
+          case '}':
+          case ']':
+            if (unicode()) {
+                return ReportError(current() == ']'
+                                   ? JSMSG_RAW_BRACKET_IN_REGEP
+                                   : JSMSG_RAW_BRACE_IN_REGEP);
+            }
+            MOZ_FALLTHROUGH;
           default:
-            if (unicode_) {
+            if (unicode()) {
                 char16_t lead, trail;
                 if (ParseRawSurrogatePair(&lead, &trail)) {
-                    builder->AddAtom(SurrogatePairAtom(zone(), lead, trail, ignore_case_));
-                } else {
-                    widechar c = current();
-                    if (unicode::IsLeadSurrogate(c))
-                        builder->AddAtom(LeadSurrogateAtom(zone(), c, ignore_case()));
-                    else if (unicode::IsTrailSurrogate(c))
-                        builder->AddAtom(TrailSurrogateAtom(zone(), c, ignore_case()));
-                    else if (c == ']')
-                        return ReportError(JSMSG_RAW_BRACKET_IN_REGEP);
-                    else if (c == '}')
-                        return ReportError(JSMSG_RAW_BRACE_IN_REGEP);
-                    else
-                        builder->AddCharacter(c);
-                    Advance();
+                    uc32 value = unicode::UTF16Decode(lead, trail);
+                    builder->AddUnicodeCharacter(value);
+                    break;
                 }
-                break;
             }
-            builder->AddCharacter(current());
+            builder->AddUnicodeCharacter(current());
             Advance();
             break;
         }  // end switch(current())
@@ -1192,6 +1140,9 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                         JSMSG_NUMBERS_OUT_OF_ORDER);
                 }
                 break;
+            } else if (unicode()) {
+                // With /u, incomplete quantifiers are not allowed.
+                return ReportError(JSMSG_RAW_BRACE_IN_REGEP);
             }
             continue;
           default:
@@ -1202,7 +1153,9 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             quantifier_type = RegExpQuantifier::NON_GREEDY;
             Advance();
         }
-        builder->AddQuantifierToAtom(min, max, quantifier_type);
+        if (!builder->AddQuantifierToAtom(min, max, quantifier_type)) {
+            return ReportError(JSMSG_NOTHING_TO_REPEAT);
+        }
     }
 }
 
@@ -1417,18 +1370,6 @@ uc32 RegExpParser<CharT>::ParseOctalLiteral() {
     return value;
 }
 
-// Returns the value (0 .. 15) of a hexadecimal character c.
-// If c is not a legal hexadecimal character, returns a value < 0.
-inline int
-HexValue(uint32_t c)
-{
-    c -= '0';
-    if (static_cast<unsigned>(c) <= 9) return c;
-    c = (c | 0x20) - ('a' - '0');  // detect 0x11..0x16 and 0x31..0x36.
-    if (static_cast<unsigned>(c) <= 5) return c + 10;
-    return -1;
-}
-
 template <typename CharT>
 bool RegExpParser<CharT>::ParseHexEscape(int length, uc32* value) {
     const CharT* start = position();
@@ -1444,6 +1385,69 @@ bool RegExpParser<CharT>::ParseHexEscape(int length, uc32* value) {
         Advance();
     }
     *value = val;
+    return true;
+}
+
+// This parses RegExpUnicodeEscapeSequence as described in ECMA262.
+template <typename CharT>
+bool RegExpParser<CharT>::ParseUnicodeEscape(uc32* value, bool* parsed) {
+    // Accept both \uxxxx and \u{xxxxxx} (if harmony unicode escapes are
+    // allowed). In the latter case, the number of hex digits between { } is
+    // arbitrary. \ and u have already been read.
+    if (current() == '{' && unicode()) {
+        Advance();
+        if (ParseUnlimitedLengthHexNumber(0x10ffff, value)) {
+            if (current() == '}') {
+                Advance();
+                *parsed = true;
+                return true;
+            }
+            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+            return false;
+        }
+        // Error already reported in ParseUnlimitedLengthHexNumber.
+        return false;
+    }
+    bool result = ParseHexEscape(4, value);
+    if (result && unicode() && unicode::IsLeadSurrogate(*value) &&
+        current() == '\\') {
+        // Attempt to read trail surrogate.
+        const CharT* start = position();
+        if (Next() == 'u') {
+            Advance(2);
+            uc32 trail;
+            if (ParseHexEscape(4, &trail) &&
+                unicode::IsTrailSurrogate(trail)) {
+                *value = unicode::UTF16Decode(static_cast<uc16>(*value),
+                                              static_cast<uc16>(trail));
+                *parsed = true;
+                return true;
+            }
+        }
+        Reset(start);
+    }
+    *parsed = result;
+    return true;
+}
+
+template <typename CharT>
+bool RegExpParser<CharT>::ParseUnlimitedLengthHexNumber(int max_value, uc32* value) {
+    uc32 x = 0;
+    int d = HexValue(current());
+    if (d < 0) {
+        ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+        return false;
+    }
+    while (d >= 0) {
+        x = x * 16 + d;
+        if (x > max_value) {
+            ReportError(JSMSG_UNICODE_OVERFLOW, "regular expression");
+            return false;
+        }
+        Advance();
+        d = HexValue(current());
+    }
+    *value = x;
     return true;
 }
 
@@ -1556,33 +1560,20 @@ bool RegExpParser<CharT>::ParseClassCharacterEscape(uc32* code) {
       }
       case 'u': {
         Advance();
-        widechar value;
-        if (unicode_) {
-            if (current() == '{') {
-                if (!ParseBracedHexEscape(&value))
-                    return false;
-                *code = value;
-                return true;
-            }
-            if (ParseHexEscape(4, &value)) {
-                if (unicode::IsLeadSurrogate(value)) {
-                    widechar trail;
-                    if (ParseTrailSurrogate(&trail)) {
-                        *code = unicode::UTF16Decode(value, trail);
-                        return true;
-                    }
-                }
-                *code = value;
-                return true;
-            }
-            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+        uc32 value;
+        bool parsed;
+        if (!ParseUnicodeEscape(&value, &parsed))
             return false;
-        }
-        if (ParseHexEscape(4, &value)) {
+        if (parsed) {
             *code = value;
             return true;
         }
-        // If \u is not followed by a four-digit or braced hexadecimal, treat it
+        if (unicode()) {
+            // With /u, invalid escapes are not treated as identity escapes.
+            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+            return false;
+        }
+        // If \u is not followed by a four-digit hexadecimal or braced hexadecimal, treat it
         // as an identity escape.
         *code = 'u';
         return true;
@@ -1604,9 +1595,45 @@ bool RegExpParser<CharT>::ParseClassCharacterEscape(uc32* code) {
 }
 
 template <typename CharT>
-RegExpTree*
-RegExpParser<CharT>::ParseCharacterClass()
-{
+bool RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, uc32* value) {
+    MOZ_ASSERT(*char_class == kNoCharClass);
+    uc32 current_char = current();
+    if (current_char == '\\') {
+        switch (Next()) {
+          case 'w':
+          case 'W':
+          case 'd':
+          case 'D':
+          case 's':
+          case 'S': {
+            *char_class = Next();
+            Advance(2);
+            return true;
+          }
+          case kEndMarker:
+            return ReportError(JSMSG_ESCAPE_AT_END_OF_REGEXP);
+          default:
+            break;
+        }
+        if (!ParseClassCharacterEscape(value))
+            return false;
+        return true;
+    } else {
+        if (unicode_) {
+            char16_t lead, trail;
+            if (ParseRawSurrogatePair(&lead, &trail)) {
+                *value = unicode::UTF16Decode(lead, trail);
+                return true;
+            }
+        }
+        Advance();
+        *value = current_char;
+        return true;
+    }
+}
+
+template <typename CharT>
+RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
     DCHECK_EQ(current(), '[');
     Advance();
     bool is_negated = false;
@@ -1626,9 +1653,9 @@ RegExpParser<CharT>::ParseCharacterClass()
     }
 
     while (has_more() && current() != ']') {
-        char16_t char_class = kNoCharClass;
-        widechar first = 0;
-        if (!ParseClassAtom(&char_class, &first))
+        uc32 char_1 = 0, char_2 = 0;
+        char16_t char_class = kNoCharClass, char_class_2 = kNoCharClass;
+        if (!ParseClassAtom(&char_class, &char_1))
             return nullptr;
         if (current() == '-') {
             Advance();
@@ -1639,44 +1666,47 @@ RegExpParser<CharT>::ParseCharacterClass()
             } else if (current() == ']') {
                 if (unicode_) {
                     AddCharOrEscapeUnicode(zone(), ranges, lead_ranges, trail_ranges, wide_ranges,
-                                           char_class, first, ignore_case_);
+                                           char_class, char_1, ignore_case_);
                 } else {
-                    AddCharOrEscape(zone(), ranges, char_class, first);
+                    AddCharOrEscape(zone(), ranges, char_class, char_1);
                 }
                 ranges->append(CharacterRange::Singleton('-'));
                 break;
             }
-            char16_t char_class_2 = kNoCharClass;
-            widechar next = 0;
-            if (!ParseClassAtom(&char_class_2, &next))
+            if (!ParseClassAtom(&char_class_2, &char_2))
                 return nullptr;
             if (char_class != kNoCharClass || char_class_2 != kNoCharClass) {
-                if (unicode_)
+                if (unicode()) {
+                    // ES2015 21.2.2.15.1 step 1.
                     return ReportError(JSMSG_RANGE_WITH_CLASS_ESCAPE);
+                }
 
                 // Either end is an escaped character class. Treat the '-' verbatim.
-                AddCharOrEscape(zone(), ranges, char_class, first);
+                AddCharOrEscape(zone(), ranges, char_class, char_1);
                 ranges->append(CharacterRange::Singleton('-'));
-                AddCharOrEscape(zone(), ranges, char_class_2, next);
+                AddCharOrEscape(zone(), ranges, char_class_2, char_2);
                 continue;
             }
-            if (first > next)
+            // ES2015 21.2.2.15.1 step 6.
+            if (char_1 > char_2) {
                 return ReportError(JSMSG_BAD_CLASS_RANGE);
+            }
             if (unicode_)
-                AddUnicodeRange(zone(), ranges, lead_ranges, trail_ranges,wide_ranges, first, next);
+                AddUnicodeRange(zone(), ranges, lead_ranges, trail_ranges,wide_ranges, char_1, char_2);
             else
-                ranges->append(CharacterRange::Range(first, next));
+                ranges->append(CharacterRange::Range(char_1, char_2));
         } else {
             if (unicode_) {
                 AddCharOrEscapeUnicode(zone(), ranges, lead_ranges, trail_ranges, wide_ranges,
-                                       char_class, first, ignore_case_);
+                                       char_class, char_1, ignore_case_);
             } else {
-                AddCharOrEscape(zone(), ranges, char_class, first);
+                AddCharOrEscape(zone(), ranges, char_class, char_1);
             }
         }
     }
-    if (!has_more())
+    if (!has_more()) {
         return ReportError(JSMSG_UNTERM_CLASS);
+    }
     Advance();
     if (!unicode_) {
         if (ranges->length() == 0) {
@@ -1697,73 +1727,6 @@ RegExpParser<CharT>::ParseCharacterClass()
 
     return UnicodeRangesAtom(zone(), ranges, lead_ranges, trail_ranges, wide_ranges, is_negated,
                              ignore_case_);
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseBracedHexEscape(widechar* value)
-{
-    MOZ_ASSERT(current() == '{');
-    Advance();
-
-    bool first = true;
-    uint32_t code = 0;
-    while (true) {
-        widechar c = current();
-        if (c == kEndMarker) {
-            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-            return false;
-        }
-        if (c == '}') {
-            if (first) {
-                ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-                return false;
-            }
-            Advance();
-            break;
-        }
-
-        int d = HexValue(c);
-        if (d < 0) {
-            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-            return false;
-        }
-        code = (code << 4) | d;
-        if (code > unicode::NonBMPMax) {
-            ReportError(JSMSG_UNICODE_OVERFLOW, "regular expression");
-            return false;
-        }
-        Advance();
-        first = false;
-    }
-
-    *value = code;
-    return true;
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseTrailSurrogate(widechar* value)
-{
-    if (current() != '\\')
-        return false;
-
-    const CharT* start = position();
-    Advance();
-    if (current() != 'u') {
-        Reset(start);
-        return false;
-    }
-    Advance();
-    if (!ParseHexEscape(4, value)) {
-        Reset(start);
-        return false;
-    }
-    if (!unicode::IsTrailSurrogate(*value)) {
-        Reset(start);
-        return false;
-    }
-    return true;
 }
 
 template <typename CharT>
@@ -1790,6 +1753,12 @@ RegExpParser<CharT>::ParseRawSurrogatePair(char16_t* lead, char16_t* trail)
 // ----------------------------------------------------------------------------
 // RegExpBuilder
 
+#ifdef DEBUG
+#define LAST(x) last_added_ = x;
+#else
+#define LAST(x)
+#endif
+
 RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
   : zone_(zone),
     pending_empty_(false),
@@ -1801,15 +1770,27 @@ RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
 #endif
 {}
 
+void RegExpBuilder::AddLeadSurrogate(uc16 lead_surrogate) {
+    DCHECK(unicode::IsLeadSurrogate(lead_surrogate));
+    AddAtom(LeadSurrogateAtom(zone(), lead_surrogate, ignore_case()));
+}
+
+void RegExpBuilder::AddTrailSurrogate(uc16 trail_surrogate) {
+    DCHECK(unicode::IsTrailSurrogate(trail_surrogate));
+    AddAtom(TrailSurrogateAtom(zone(), trail_surrogate, ignore_case()));
+}
+
+void RegExpBuilder::FlushPendingSurrogate() {
+    // TODO(anba): Port pending surrogate logic.
+}
+
 void RegExpBuilder::FlushCharacters() {
     pending_empty_ = false;
     if (characters_ != NULL) {
         RegExpTree* atom = zone()->newInfallible<RegExpAtom>(characters_);
         characters_ = NULL;
         text_.Add(atom, zone());
-#ifdef DEBUG
-        last_added_ = ADD_ATOM;
-#endif
+        LAST(ADD_ATOM);
     }
 }
 
@@ -1834,12 +1815,33 @@ void RegExpBuilder::AddCharacter(uc16 c) {
         characters_ = zone()->newInfallible<CharacterVector>(*zone());
     }
     characters_->append(c);
-#ifdef DEBUG
-    last_added_ = ADD_CHAR;
-#endif
+    LAST(ADD_CHAR);
+}
+
+void RegExpBuilder::AddUnicodeCharacter(uc32 c) {
+    if (c > static_cast<uc32>(unicode::UTF16Max)) {
+        DCHECK(unicode());
+        char16_t lead, trail;
+        unicode::UTF16Encode(c, &lead, &trail);
+        AddAtom(SurrogatePairAtom(zone(), lead, trail, ignore_case()));
+    } else if (unicode() && unicode::IsLeadSurrogate(c)) {
+        AddLeadSurrogate(c);
+    } else if (unicode() && unicode::IsTrailSurrogate(c)) {
+        AddTrailSurrogate(c);
+    } else {
+        AddCharacter(static_cast<uc16>(c));
+    }
+}
+
+void RegExpBuilder::AddEscapedUnicodeCharacter(uc32 character) {
+    AddUnicodeCharacter(character);
 }
 
 void RegExpBuilder::AddEmpty() { pending_empty_ = true; }
+
+void RegExpBuilder::AddCharacterClass(RegExpCharacterClass* cc) {
+    AddAtom(cc);
+}
 
 void RegExpBuilder::AddAtom(RegExpTree* term) {
     if (term->IsEmpty()) {
@@ -1853,9 +1855,7 @@ void RegExpBuilder::AddAtom(RegExpTree* term) {
         FlushText();
         terms_.Add(term, zone());
     }
-#ifdef DEBUG
-    last_added_ = ADD_ATOM;
-#endif
+    LAST(ADD_ATOM);
 }
 
 void RegExpBuilder::AddAssertion(RegExpTree* assert) {
@@ -1867,9 +1867,7 @@ void RegExpBuilder::AddAssertion(RegExpTree* assert) {
         if (last->assertion_type() == next->assertion_type()) return;
     }
     terms_.Add(assert, zone());
-#ifdef DEBUG
-    last_added_ = ADD_ASSERT;
-#endif
+    LAST(ADD_ASSERT);
 }
 
 void RegExpBuilder::NewAlternative() { FlushTerms(); }
@@ -1887,9 +1885,7 @@ void RegExpBuilder::FlushTerms() {
     }
     alternatives_.Add(alternative, zone());
     terms_.Clear();
-#ifdef DEBUG
-    last_added_ = ADD_NONE;
-#endif
+    LAST(ADD_NONE);
 }
 
 RegExpTree* RegExpBuilder::ToRegExp() {
@@ -1900,8 +1896,8 @@ RegExpTree* RegExpBuilder::ToRegExp() {
     return zone()->newInfallible<RegExpDisjunction>(alternatives_.GetList(zone()));
 }
 
-bool RegExpBuilder::AddQuantifierToAtom(int min, int max,
-        RegExpQuantifier::QuantifierType quantifier_type) {
+bool RegExpBuilder::AddQuantifierToAtom(
+        int min, int max, RegExpQuantifier::QuantifierType quantifier_type) {
     if (pending_empty_) {
         pending_empty_ = false;
         return true;
@@ -1929,11 +1925,11 @@ bool RegExpBuilder::AddQuantifierToAtom(int min, int max,
     } else if (terms_.length() > 0) {
         DCHECK(last_added_ == ADD_ATOM);
         atom = terms_.RemoveLast();
+        // With /u, lookarounds are not quantifiable.
+        if (unicode() && atom->IsLookaround()) return false;
         if (atom->max_match() == 0) {
             // Guaranteed to only match an empty string.
-#ifdef DEBUG
-            last_added_ = ADD_TERM;
-#endif
+            LAST(ADD_TERM);
             if (min == 0) {
                 return true;
             }
@@ -1946,11 +1942,11 @@ bool RegExpBuilder::AddQuantifierToAtom(int min, int max,
     }
     terms_.Add(zone()->newInfallible<RegExpQuantifier>(min, max, quantifier_type, atom),
                zone());
-#ifdef DEBUG
-    last_added_ = ADD_TERM;
-#endif
+    LAST(ADD_TERM);
     return true;
 }
+
+#undef LAST
 
 template class irregexp::RegExpParser<Latin1Char>;
 template class irregexp::RegExpParser<char16_t>;
