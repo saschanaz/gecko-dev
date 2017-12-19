@@ -45,6 +45,8 @@ using namespace js::irregexp;
 using mozilla::Move;
 using mozilla::PointerRangeSize;
 
+using irregexp::Zone;
+
 inline bool
 IsInRange(int value, int lower_limit, int higher_limit)
 {
@@ -360,7 +362,8 @@ UnicodeRangesAtom(LifoAlloc* alloc,
         NegateUnicodeRanges(alloc, &wide_ranges, NonBMPRange());
     }
 
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc);
+    bool unicode = true;
+    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
 
     bool added = false;
 
@@ -498,7 +501,9 @@ RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, widechar* value)
 static inline RegExpTree*
 CaseFoldingSurrogatePairAtom(LifoAlloc* alloc, char16_t lead, char16_t trail, int32_t diff)
 {
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc);
+    bool ignore_case = true;
+    bool unicode = true;
+    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
 
     builder->AddCharacter(lead);
     CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
@@ -521,16 +526,18 @@ SurrogatePairAtom(LifoAlloc* alloc, char16_t lead, char16_t trail, bool ignore_c
 #undef CALL_ATOM
     }
 
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc);
+    bool unicode = true;
+    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
     builder->AddCharacter(lead);
     builder->AddCharacter(trail);
     return builder->ToRegExp();
 }
 
 static inline RegExpTree*
-LeadSurrogateAtom(LifoAlloc* alloc, char16_t value)
+LeadSurrogateAtom(LifoAlloc* alloc, char16_t value, bool ignore_case)
 {
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc);
+    bool unicode = true;
+    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
     builder->AddCharacter(value);
     builder->AddAtom(NegativeLookahead(alloc, unicode::TrailSurrogateMin,
                                        unicode::TrailSurrogateMax));
@@ -538,9 +545,10 @@ LeadSurrogateAtom(LifoAlloc* alloc, char16_t value)
 }
 
 static inline RegExpTree*
-TrailSurrogateAtom(LifoAlloc* alloc, char16_t value)
+TrailSurrogateAtom(LifoAlloc* alloc, char16_t value, bool ignore_case)
 {
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc);
+    bool unicode = true;
+    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
     builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(
         RegExpAssertion::NOT_AFTER_LEAD_SURROGATE));
     builder->AddCharacter(value);
@@ -548,9 +556,10 @@ TrailSurrogateAtom(LifoAlloc* alloc, char16_t value)
 }
 
 static inline RegExpTree*
-UnicodeEverythingAtom(LifoAlloc* alloc)
+UnicodeEverythingAtom(LifoAlloc* alloc, bool ignore_case)
 {
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc);
+    bool unicode = true;
+    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
 
     // everything except \x0a, \x0d, \u2028 and \u2029
 
@@ -594,12 +603,13 @@ UnicodeCharacterClassEscapeAtom(LifoAlloc* alloc, char16_t char_class, bool igno
 }
 
 static inline RegExpTree*
-UnicodeBackReferenceAtom(LifoAlloc* alloc, RegExpTree* atom)
+UnicodeBackReferenceAtom(LifoAlloc* alloc, RegExpTree* atom, bool ignore_case)
 {
     // If a back reference has a standalone lead surrogate as its last
     // character, then that lead surrogate shouldn't match lead surrogates that
     // are paired with a corresponding trail surrogate.
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc);
+    bool unicode = true;
+    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
 
     builder->AddAtom(atom);
     builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(
@@ -612,21 +622,21 @@ UnicodeBackReferenceAtom(LifoAlloc* alloc, RegExpTree* atom)
 // RegExpParser
 
 template <typename CharT>
-RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, LifoAlloc* alloc,
-                                  const CharT* chars, const CharT* end, bool multiline_mode,
+RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, Zone* zone,
+                                  const CharT* chars, const CharT* end, bool multiline,
                                   bool unicode, bool ignore_case)
   : ts(ts),
-    alloc(alloc),
+    zone_(zone),
     captures_(nullptr),
     start_(chars),
     next_pos_(start_),
     end_(end),
     current_(kEndMarker),
+    ignore_case_(ignore_case),
+    multiline_(multiline),
+    unicode_(unicode),
     capture_count_(0),
     has_more_(true),
-    multiline_(multiline_mode),
-    unicode_(unicode),
-    ignore_case_(ignore_case),
     simple_(false),
     contains_anchor_(false),
     is_scanned_for_captures_(false)
@@ -648,9 +658,11 @@ RegExpParser<CharT>::Advance()
     }
 }
 
-static bool
-IsSyntaxCharacter(widechar c)
-{
+template <typename CharT>
+bool RegExpParser<CharT>::simple() { return simple_; }
+
+template <typename CharT>
+bool RegExpParser<CharT>::IsSyntaxCharacterOrSlash(uc32 c) {
   switch (c) {
     case '^':
     case '$':
@@ -669,8 +681,9 @@ IsSyntaxCharacter(widechar c)
     case '/':
       return true;
     default:
-      return false;
+      break;
   }
+  return false;
 }
 
 template <typename CharT>
@@ -738,9 +751,7 @@ RegExpParser<CharT>::ReportError(unsigned errorNumber, const char* param /* = nu
 // Pattern ::
 //   Disjunction
 template <typename CharT>
-RegExpTree*
-RegExpParser<CharT>::ParsePattern()
-{
+RegExpTree* RegExpParser<CharT>::ParsePattern() {
     RegExpTree* result = ParseDisjunction();
     MOZ_ASSERT_IF(result, !has_more());
     return result;
@@ -757,28 +768,28 @@ RegExpParser<CharT>::ParsePattern()
 //   Atom
 //   Atom Quantifier
 template <typename CharT>
-RegExpTree*
-RegExpParser<CharT>::ParseDisjunction()
-{
+RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
     // Used to store current state while parsing subexpressions.
-    RegExpParserState initial_state(alloc, nullptr, INITIAL, 0);
-    RegExpParserState* stored_state = &initial_state;
+    RegExpParserState initial_state(nullptr, INITIAL, RegExpLookaround::LOOKAHEAD, 0,
+                                    ignore_case(), unicode(), zone());
+    RegExpParserState* state = &initial_state;
     // Cache the builder in a local variable for quick access.
     RegExpBuilder* builder = initial_state.builder();
     while (true) {
         switch (current()) {
           case kEndMarker:
-            if (stored_state->IsSubexpression()) {
+            if (state->IsSubexpression()) {
                 // Inside a parenthesized group when hitting end of input.
                 return ReportError(JSMSG_MISSING_PAREN);
             }
-            DCHECK_EQ(INITIAL, stored_state->group_type());
+            DCHECK_EQ(INITIAL, state->group_type());
             // Parsing completed successfully.
             return builder->ToRegExp();
           case ')': {
-            if (!stored_state->IsSubexpression())
+            if (!state->IsSubexpression()) {
                 return ReportError(JSMSG_UNMATCHED_RIGHT_PAREN);
-            DCHECK_NE(INITIAL, stored_state->group_type());
+            }
+            DCHECK_NE(INITIAL, state->group_type());
 
             Advance();
             // End disjunction parsing and convert builder content to new single
@@ -787,31 +798,30 @@ RegExpParser<CharT>::ParseDisjunction()
 
             int end_capture_index = captures_started();
 
-            int capture_index = stored_state->capture_index();
-            SubexpressionType group_type = stored_state->group_type();
+            int capture_index = state->capture_index();
+            SubexpressionType group_type = state->group_type();
 
             // Restore previous state.
-            stored_state = stored_state->previous_state();
-            builder = stored_state->builder();
+            state = state->previous_state();
+            builder = state->builder();
 
             // Build result of subexpression.
             if (group_type == CAPTURE) {
-                RegExpCapture* capture = alloc->newInfallible<RegExpCapture>(body, capture_index);
+                RegExpCapture* capture = zone_->newInfallible<RegExpCapture>(body, capture_index);
                 (*captures_)[capture_index - 1] = capture;
                 body = capture;
             } else if (group_type != GROUPING) {
-                DCHECK(group_type == POSITIVE_LOOKAHEAD ||
-                       group_type == NEGATIVE_LOOKAHEAD);
-                bool is_positive = (group_type == POSITIVE_LOOKAHEAD);
-                body = alloc->newInfallible<RegExpLookaround>(body,
-                                                   is_positive,
-                                                   end_capture_index - capture_index,
-                                                   capture_index);
+                DCHECK(group_type == POSITIVE_LOOKAROUND ||
+                       group_type == NEGATIVE_LOOKAROUND);
+                bool is_positive = (group_type == POSITIVE_LOOKAROUND);
+                body = zone_->newInfallible<RegExpLookaround>(
+                    body, is_positive, end_capture_index - capture_index,
+                    capture_index);
             }
             builder->AddAtom(body);
-            if (unicode_ && (group_type == POSITIVE_LOOKAHEAD || group_type == NEGATIVE_LOOKAHEAD))
+            if (unicode_ && (group_type == POSITIVE_LOOKAROUND || group_type == NEGATIVE_LOOKAROUND))
                 continue;
-            // For compatability with JSC and ES3, we allow quantifiers after
+            // For compatibility with JSC and ES3, we allow quantifiers after
             // lookaheads, and break in all cases.
             break;
           }
@@ -826,10 +836,12 @@ RegExpParser<CharT>::ParseDisjunction()
             return ReportError(JSMSG_NOTHING_TO_REPEAT);
           case '^': {
             Advance();
-            if (multiline_) {
-                builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(RegExpAssertion::START_OF_LINE));
+            if (multiline()) {
+                builder->AddAssertion(
+                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::START_OF_LINE));
             } else {
-                builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(RegExpAssertion::START_OF_INPUT));
+                builder->AddAssertion(
+                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::START_OF_INPUT));
                 set_contains_anchor();
             }
             continue;
@@ -837,53 +849,59 @@ RegExpParser<CharT>::ParseDisjunction()
           case '$': {
             Advance();
             RegExpAssertion::AssertionType assertion_type =
-                multiline_ ? RegExpAssertion::END_OF_LINE :
-                RegExpAssertion::END_OF_INPUT;
-            builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(assertion_type));
+                multiline() ? RegExpAssertion::END_OF_LINE
+                            : RegExpAssertion::END_OF_INPUT;
+            builder->AddAssertion(zone_->newInfallible<RegExpAssertion>(assertion_type));
             continue;
           }
           case '.': {
             Advance();
-            // everything except \x0a, \x0d, \u2028 and \u2029
+            // Everything except \x0a, \x0d, \u2028 and \u2029
             if (unicode_) {
-                builder->AddAtom(UnicodeEverythingAtom(alloc));
+                builder->AddAtom(UnicodeEverythingAtom(zone(), ignore_case()));
                 break;
             }
-            CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-            CharacterRange::AddClassEscape('.', ranges, alloc);
-            RegExpTree* atom = alloc->newInfallible<RegExpCharacterClass>(ranges, false);
+            CharacterRangeVector* ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
+            CharacterRange::AddClassEscape('.', ranges, zone());
+            RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges, false);
             builder->AddAtom(atom);
             break;
           }
           case '(': {
             SubexpressionType subexpr_type = CAPTURE;
+            RegExpLookaround::Type lookaround_type = state->lookaround_type();
             Advance();
             if (current() == '?') {
                 switch (Next()) {
                   case ':':
                     subexpr_type = GROUPING;
+                    Advance(2);
                     break;
                   case '=':
-                    subexpr_type = POSITIVE_LOOKAHEAD;
+                    lookaround_type = RegExpLookaround::LOOKAHEAD;
+                    subexpr_type = POSITIVE_LOOKAROUND;
+                    Advance(2);
                     break;
                   case '!':
-                    subexpr_type = NEGATIVE_LOOKAHEAD;
+                    lookaround_type = RegExpLookaround::LOOKAHEAD;
+                    subexpr_type = NEGATIVE_LOOKAROUND;
+                    Advance(2);
                     break;
                   default:
                     return ReportError(JSMSG_INVALID_GROUP);
                 }
-                Advance(2);
             } else {
                 if (captures_ == nullptr)
-                    captures_ = alloc->newInfallible<RegExpCaptureVector>(*alloc);
+                    captures_ = zone_->newInfallible<RegExpCaptureVector>(*zone());
                 if (captures_started() >= kMaxCaptures)
                     return ReportError(JSMSG_TOO_MANY_PARENS);
                 captures_->append((RegExpCapture*) nullptr);
             }
             // Store current state and begin new disjunction parsing.
-            stored_state = alloc->newInfallible<RegExpParserState>(alloc, stored_state, subexpr_type,
-                                                                   captures_started());
-            builder = stored_state->builder();
+            state = zone_->newInfallible<RegExpParserState>(
+                state, subexpr_type, lookaround_type, captures_started(),
+                ignore_case(), unicode(), zone());
+            builder = state->builder();
             continue;
           }
           case '[': {
@@ -901,11 +919,13 @@ RegExpParser<CharT>::ParseDisjunction()
                 return ReportError(JSMSG_ESCAPE_AT_END_OF_REGEXP);
               case 'b':
                 Advance(2);
-                builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(RegExpAssertion::BOUNDARY));
+                builder->AddAssertion(
+                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::BOUNDARY));
                 continue;
               case 'B':
                 Advance(2);
-                builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(RegExpAssertion::NON_BOUNDARY));
+                builder->AddAssertion(
+                    zone_->newInfallible<RegExpAssertion>(RegExpAssertion::NON_BOUNDARY));
                 continue;
                 // AtomEscape ::
                 //   CharacterClassEscape
@@ -915,7 +935,7 @@ RegExpParser<CharT>::ParseDisjunction()
               case 'D': case 'S': case 'W':
                 if (unicode_) {
                     Advance();
-                    builder->AddAtom(UnicodeCharacterClassEscapeAtom(alloc, current(),
+                    builder->AddAtom(UnicodeCharacterClassEscapeAtom(zone(), current(),
                                                                      ignore_case_));
                     Advance();
                     break;
@@ -925,19 +945,27 @@ RegExpParser<CharT>::ParseDisjunction()
                 widechar c = Next();
                 Advance(2);
                 CharacterRangeVector* ranges =
-                    alloc->newInfallible<CharacterRangeVector>(*alloc);
+                    zone_->newInfallible<CharacterRangeVector>(*zone());
                 if (unicode_)
-                    CharacterRange::AddClassEscapeUnicode(c, ranges, ignore_case_, alloc);
+                    CharacterRange::AddClassEscapeUnicode(c, ranges, ignore_case_, zone());
                 else
-                    CharacterRange::AddClassEscape(c, ranges, alloc);
-                RegExpTree* atom = alloc->newInfallible<RegExpCharacterClass>(ranges, false);
+                    CharacterRange::AddClassEscape(c, ranges, zone());
+                RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges, false);
                 builder->AddAtom(atom);
                 break;
               }
-              case '1': case '2': case '3': case '4': case '5': case '6':
-              case '7': case '8': case '9': {
+              case '1':
+              case '2':
+              case '3':
+              case '4':
+              case '5':
+              case '6':
+              case '7':
+              case '8':
+              case '9': {
                 int index = 0;
-                if (ParseBackReferenceIndex(&index)) {
+                bool is_backref = ParseBackReferenceIndex(&index);
+                if (is_backref) {
                     RegExpCapture* capture = nullptr;
                     if (captures_ != nullptr && index <= (int) captures_->length()) {
                         capture = (*captures_)[index - 1];
@@ -946,18 +974,20 @@ RegExpParser<CharT>::ParseDisjunction()
                         builder->AddEmpty();
                         break;
                     }
-                    RegExpTree* atom = alloc->newInfallible<RegExpBackReference>(capture);
+                    RegExpTree* atom = zone_->newInfallible<RegExpBackReference>(capture);
                     if (unicode_)
-                        builder->AddAtom(UnicodeBackReferenceAtom(alloc, atom));
+                        builder->AddAtom(UnicodeBackReferenceAtom(zone(), atom, ignore_case()));
                     else
                         builder->AddAtom(atom);
                     break;
                 }
-                if (unicode_)
+                // With /u, no identity escapes except for syntax characters
+                // are allowed. Otherwise, all identity escapes are allowed.
+                if (unicode()) {
                     return ReportError(JSMSG_BACK_REF_OUT_OF_RANGE);
-                widechar first_digit = Next();
+                }
+                uc32 first_digit = Next();
                 if (first_digit == '8' || first_digit == '9') {
-                    // Treat as identity escape
                     builder->AddCharacter(first_digit);
                     Advance(2);
                     break;
@@ -965,16 +995,12 @@ RegExpParser<CharT>::ParseDisjunction()
                 MOZ_FALLTHROUGH;
               }
               case '0': {
-                if (unicode_) {
-                    Advance(2);
-                    if (IsDecimalDigit(current()))
-                        return ReportError(JSMSG_INVALID_DECIMAL_ESCAPE);
-                    builder->AddCharacter(0);
-                    break;
-                }
-
                 Advance();
-                widechar octal = ParseOctalLiteral();
+                if (unicode() && Next() >= '0' && Next() <= '9') {
+                    // With /u, decimal escape with leading 0 are not parsed as octal.
+                    return ReportError(JSMSG_INVALID_DECIMAL_ESCAPE);
+                }
+                uc32 octal = ParseOctalLiteral();
                 builder->AddCharacter(octal);
                 break;
               }
@@ -1002,17 +1028,19 @@ RegExpParser<CharT>::ParseDisjunction()
                 break;
               case 'c': {
                 Advance();
-                widechar controlLetter = Next();
+                uc32 controlLetter = Next();
                 // Special case if it is an ASCII letter.
                 // Convert lower case letters to uppercase.
-                widechar letter = controlLetter & ~('a' ^ 'A');
+                uc32 letter = controlLetter & ~('a' ^ 'A');
                 if (letter < 'A' || 'Z' < letter) {
-                    if (unicode_)
-                        return ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
                     // controlLetter is not in range 'A'-'Z' or 'a'-'z'.
-                    // This is outside the specification. We match JSC in
-                    // reading the backslash as a literal character instead
-                    // of as starting an escape.
+                    // Read the backslash as a literal character instead of as
+                    // starting an escape.
+                    // ES#prod-annexB-ExtendedPatternCharacter
+                    if (unicode()) {
+                        // With /u, invalid escapes are not treated as identity escapes.
+                        return ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+                    }
                     builder->AddCharacter('\\');
                 } else {
                     Advance(2);
@@ -1022,13 +1050,14 @@ RegExpParser<CharT>::ParseDisjunction()
               }
               case 'x': {
                 Advance(2);
-                widechar value;
+                uc32 value;
                 if (ParseHexEscape(2, &value)) {
                     builder->AddCharacter(value);
-                } else {
-                    if (unicode_)
-                        return ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+                } else if (!unicode()) {
                     builder->AddCharacter('x');
+                } else {
+                    // With /u, invalid escapes are not treated as identity escapes.
+                    return ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
                 }
                 break;
               }
@@ -1040,13 +1069,13 @@ RegExpParser<CharT>::ParseDisjunction()
                         if (!ParseBracedHexEscape(&value))
                             return nullptr;
                         if (unicode::IsLeadSurrogate(value)) {
-                            builder->AddAtom(LeadSurrogateAtom(alloc, value));
+                            builder->AddAtom(LeadSurrogateAtom(zone(), value, ignore_case()));
                         } else if (unicode::IsTrailSurrogate(value)) {
-                            builder->AddAtom(TrailSurrogateAtom(alloc, value));
+                            builder->AddAtom(TrailSurrogateAtom(zone(), value, ignore_case()));
                         } else if (value >= unicode::NonBMPMin) {
                             char16_t lead, trail;
                             unicode::UTF16Encode(value, &lead, &trail);
-                            builder->AddAtom(SurrogatePairAtom(alloc, lead, trail,
+                            builder->AddAtom(SurrogatePairAtom(zone(), lead, trail,
                                                                ignore_case_));
                         } else {
                             builder->AddCharacter(value);
@@ -1055,13 +1084,13 @@ RegExpParser<CharT>::ParseDisjunction()
                         if (unicode::IsLeadSurrogate(value)) {
                             widechar trail;
                             if (ParseTrailSurrogate(&trail)) {
-                                builder->AddAtom(SurrogatePairAtom(alloc, value, trail,
+                                builder->AddAtom(SurrogatePairAtom(zone(), value, trail,
                                                                    ignore_case_));
                             } else {
-                                builder->AddAtom(LeadSurrogateAtom(alloc, value));
+                                builder->AddAtom(LeadSurrogateAtom(zone(), value, ignore_case()));
                             }
                         } else if (unicode::IsTrailSurrogate(value)) {
-                            builder->AddAtom(TrailSurrogateAtom(alloc, value));
+                            builder->AddAtom(TrailSurrogateAtom(zone(), value, ignore_case()));
                         } else {
                             builder->AddCharacter(value);
                         }
@@ -1079,7 +1108,7 @@ RegExpParser<CharT>::ParseDisjunction()
               }
               default:
                 // Identity escape.
-                if (unicode_ && !IsSyntaxCharacter(Next()))
+                if (unicode_ && !IsSyntaxCharacterOrSlash(Next()))
                     return ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
                 builder->AddCharacter(Next());
                 Advance(2);
@@ -1090,21 +1119,21 @@ RegExpParser<CharT>::ParseDisjunction()
             if (unicode_)
                 return ReportError(JSMSG_RAW_BRACE_IN_REGEP);
             int dummy;
-            if (ParseIntervalQuantifier(&dummy, &dummy))
-                return ReportError(JSMSG_NOTHING_TO_REPEAT);
+            bool parsed = ParseIntervalQuantifier(&dummy, &dummy);
+            if (parsed) return ReportError(JSMSG_NOTHING_TO_REPEAT);
             MOZ_FALLTHROUGH;
           }
           default:
             if (unicode_) {
                 char16_t lead, trail;
                 if (ParseRawSurrogatePair(&lead, &trail)) {
-                    builder->AddAtom(SurrogatePairAtom(alloc, lead, trail, ignore_case_));
+                    builder->AddAtom(SurrogatePairAtom(zone(), lead, trail, ignore_case_));
                 } else {
                     widechar c = current();
                     if (unicode::IsLeadSurrogate(c))
-                        builder->AddAtom(LeadSurrogateAtom(alloc, c));
+                        builder->AddAtom(LeadSurrogateAtom(zone(), c, ignore_case()));
                     else if (unicode::IsTrailSurrogate(c))
-                        builder->AddAtom(TrailSurrogateAtom(alloc, c));
+                        builder->AddAtom(TrailSurrogateAtom(zone(), c, ignore_case()));
                     else if (c == ']')
                         return ReportError(JSMSG_RAW_BRACKET_IN_REGEP);
                     else if (c == '}')
@@ -1145,12 +1174,13 @@ RegExpParser<CharT>::ParseDisjunction()
             break;
           case '{':
             if (ParseIntervalQuantifier(&min, &max)) {
-                if (max < min)
-                    return ReportError(JSMSG_NUMBERS_OUT_OF_ORDER);
+                if (max < min) {
+                    return ReportError(
+                        JSMSG_NUMBERS_OUT_OF_ORDER);
+                }
                 break;
-            } else {
-                continue;
             }
+            continue;
           default:
             continue;
         }
@@ -1164,14 +1194,15 @@ RegExpParser<CharT>::ParseDisjunction()
 }
 
 #ifdef DEBUG
-// Currently only used in an assert.kASSERT.
-static bool
-IsSpecialClassEscape(widechar c)
-{
+// Currently only used in an DCHECK.
+static bool IsSpecialClassEscape(uc32 c) {
   switch (c) {
-    case 'd': case 'D':
-    case 's': case 'S':
-    case 'w': case 'W':
+    case 'd':
+    case 'D':
+    case 's':
+    case 'S':
+    case 'w':
+    case 'W':
       return true;
     default:
       return false;
@@ -1186,13 +1217,13 @@ IsSpecialClassEscape(widechar c)
 // noncapturing parentheses and can skip character classes and backslash-escaped
 // characters.
 template <typename CharT>
-void
-RegExpParser<CharT>::ScanForCaptures()
-{
+void RegExpParser<CharT>::ScanForCaptures() {
+    DCHECK(!is_scanned_for_captures_);
+    const CharT* saved_position = position();
     // Start with captures started previous to current position
     int capture_count = captures_started();
     // Add count of captures after this position.
-    widechar n;
+    int n;
     while ((n = current()) != kEndMarker) {
         Advance();
         switch (n) {
@@ -1200,7 +1231,7 @@ RegExpParser<CharT>::ScanForCaptures()
             Advance();
             break;
           case '[': {
-            widechar c;
+            int c;
             while ((c = current()) != kEndMarker) {
                 Advance();
                 if (c == '\\') {
@@ -1212,18 +1243,20 @@ RegExpParser<CharT>::ScanForCaptures()
             break;
           }
           case '(':
-            if (current() != '?') capture_count++;
+            if (current() == '?') {
+                break;
+            }
+            capture_count++;
             break;
         }
     }
     capture_count_ = capture_count;
     is_scanned_for_captures_ = true;
+    Reset(saved_position);
 }
 
 template <typename CharT>
-bool
-RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out)
-{
+bool RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out) {
     DCHECK_EQ('\\', current());
     DCHECK('1' <= Next() && Next() <= '9');
 
@@ -1233,7 +1266,7 @@ RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out)
     int value = Next() - '0';
     Advance(2);
     while (true) {
-        widechar c = current();
+        uc32 c = current();
         if (IsDecimalDigit(c)) {
             value = 10 * value + (c - '0');
             if (value > kMaxCaptures) {
@@ -1246,11 +1279,7 @@ RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out)
         }
     }
     if (value > captures_started()) {
-        if (!is_scanned_for_captures_) {
-            const CharT* saved_position = position();
-            ScanForCaptures();
-            Reset(saved_position);
-        }
+        if (!is_scanned_for_captures_) ScanForCaptures();
         if (value > capture_count_) {
             Reset(start);
             return false;
@@ -1268,9 +1297,7 @@ RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out)
 // Returns true if parsing succeeds, and set the min_out and max_out
 // values. Values are truncated to RegExpTree::kInfinity if they overflow.
 template <typename CharT>
-bool
-RegExpParser<CharT>::ParseIntervalQuantifier(int* min_out, int* max_out)
-{
+bool RegExpParser<CharT>::ParseIntervalQuantifier(int* min_out, int* max_out) {
     DCHECK_EQ(current(), '{');
     const CharT* start = position();
     Advance();
@@ -1330,13 +1357,12 @@ RegExpParser<CharT>::ParseIntervalQuantifier(int* min_out, int* max_out)
 }
 
 template <typename CharT>
-widechar
-RegExpParser<CharT>::ParseOctalLiteral()
-{
+uc32 RegExpParser<CharT>::ParseOctalLiteral() {
     DCHECK('0' <= current() && current() <= '7');
     // For compatibility with some other browsers (not all), we parse
     // up to three octal digits with a value below 256.
-    widechar value = current() - '0';
+    // ES#prod-annexB-LegacyOctalEscapeSequence
+    uc32 value = current() - '0';
     Advance();
     if ('0' <= current() && current() <= '7') {
         value = value * 8 + current() - '0';
@@ -1362,14 +1388,11 @@ HexValue(uint32_t c)
 }
 
 template <typename CharT>
-bool
-RegExpParser<CharT>::ParseHexEscape(int length, widechar* value)
-{
+bool RegExpParser<CharT>::ParseHexEscape(int length, uc32* value) {
     const CharT* start = position();
-    uint32_t val = 0;
-    bool done = false;
-    for (int i = 0; !done; i++) {
-        widechar c = current();
+    uc32 val = 0;
+    for (int i = 0; i < length; ++i) {
+        uc32 c = current();
         int d = HexValue(c);
         if (d < 0) {
             Reset(start);
@@ -1377,18 +1400,13 @@ RegExpParser<CharT>::ParseHexEscape(int length, widechar* value)
         }
         val = val * 16 + d;
         Advance();
-        if (i == length - 1) {
-            done = true;
-        }
     }
     *value = val;
     return true;
 }
 
 template <typename CharT>
-bool
-RegExpParser<CharT>::ParseClassCharacterEscape(widechar* code)
-{
+bool RegExpParser<CharT>::ParseClassCharacterEscape(uc32* code) {
     DCHECK(current() == '\\');
     DCHECK(has_next() && !IsSpecialClassEscape(Next()));
     Advance();
@@ -1420,64 +1438,77 @@ RegExpParser<CharT>::ParseClassCharacterEscape(widechar* code)
         *code = '\v';
         return true;
       case 'c': {
-        widechar controlLetter = Next();
-        widechar letter = controlLetter & ~('A' ^ 'a');
-        // For compatibility with JSC, inside a character class
-        // we also accept digits and underscore as control characters,
-        // but only in non-unicode mode
-        if ((!unicode_ &&
-             ((controlLetter >= '0' && controlLetter <= '9') ||
-              controlLetter == '_')) ||
-            (letter >= 'A' && letter <= 'Z'))
-        {
+        uc32 controlLetter = Next();
+        uc32 letter = controlLetter & ~('A' ^ 'a');
+        // Inside a character class, we also accept digits and underscore as
+        // control characters, unless with /u. See Annex B:
+        // ES#prod-annexB-ClassControlLetter
+        if (letter >= 'A' && letter <= 'Z') {
             Advance(2);
             // Control letters mapped to ASCII control characters in the range
             // 0x00-0x1f.
             *code = controlLetter & 0x1f;
             return true;
         }
-        if (unicode_) {
+        if (unicode()) {
+            // With /u, invalid escapes are not treated as identity escapes.
             ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
             return false;
         }
+        if ((controlLetter >= '0' && controlLetter <= '9') ||
+            controlLetter == '_') {
+            Advance(2);
+            *code = controlLetter & 0x1f;
+            return true;
+        }
         // We match JSC in reading the backslash as a literal
         // character instead of as starting an escape.
+        // TODO(v8:6201): Not yet covered by the spec.
         *code = '\\';
         return true;
       }
       case '0':
-        if (unicode_) {
+        // With /u, \0 is interpreted as NUL if not followed by another digit.
+        if (unicode() && !(Next() >= '0' && Next() <= '9')) {
             Advance();
-            if (IsDecimalDigit(current()))
-                return ReportError(JSMSG_INVALID_DECIMAL_ESCAPE);
             *code = 0;
             return true;
         }
         MOZ_FALLTHROUGH;
-      case '1': case '2': case '3': case '4': case '5': case '6': case '7':
-        if (unicode_) {
-            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+      case '7':
+        // For compatibility, we interpret a decimal escape that isn't
+        // a back reference (and therefore either \0 or not valid according
+        // to the specification) as a 1..3 digit octal character code.
+        // ES#prod-annexB-LegacyOctalEscapeSequence
+        if (unicode()) {
+            // With /u, decimal escape is not interpreted as octal character code.
+            ReportError(current() == '0'
+                        ? JSMSG_INVALID_DECIMAL_ESCAPE
+                        : JSMSG_INVALID_IDENTITY_ESCAPE);
             return false;
         }
-        // For compatibility, outside of unicode mode, we interpret a decimal
-        // escape that isn't a back reference (and therefore either \0 or not
-        // valid according to the specification) as a 1..3 digit octal
-        // character code.
         *code = ParseOctalLiteral();
         return true;
       case 'x': {
         Advance();
-        widechar value;
+        uc32 value;
         if (ParseHexEscape(2, &value)) {
             *code = value;
             return true;
         }
-        if (unicode_) {
+        if (unicode()) {
+            // With /u, invalid escapes are not treated as identity escapes.
             ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
             return false;
         }
         // If \x is not followed by a two-digit hexadecimal, treat it
-        // as an identity escape in non-unicode mode.
+        // as an identity escape.
         *code = 'x';
         return true;
       }
@@ -1515,17 +1546,16 @@ RegExpParser<CharT>::ParseClassCharacterEscape(widechar* code)
         return true;
       }
       default: {
-        // Extended identity escape (non-unicode only). We accept any character
-        // that hasn't been matched by a more specific case, not just the subset
-        // required by the ECMAScript specification.
-        widechar result = current();
-        if (unicode_ && result != '-' && !IsSyntaxCharacter(result)) {
-            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
-            return false;
+        uc32 result = current();
+        // With /u, no identity escapes except for syntax characters and '-' are
+        // allowed. Otherwise, all identity escapes are allowed.
+        if (!unicode() || IsSyntaxCharacterOrSlash(result) || result == '-') {
+            Advance();
+            *code = result;
+            return true;
         }
-        Advance();
-        *code = result;
-        return true;
+        ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+        return false;
       }
     }
     return true;
@@ -1542,15 +1572,15 @@ RegExpParser<CharT>::ParseCharacterClass()
         is_negated = true;
         Advance();
     }
-    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
+    CharacterRangeVector* ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
     CharacterRangeVector* lead_ranges = nullptr;
     CharacterRangeVector* trail_ranges = nullptr;
     WideCharRangeVector* wide_ranges = nullptr;
 
     if (unicode_) {
-        lead_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-        trail_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-        wide_ranges = alloc->newInfallible<WideCharRangeVector>(*alloc);
+        lead_ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
+        trail_ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
+        wide_ranges = zone_->newInfallible<WideCharRangeVector>(*zone());
     }
 
     while (has_more() && current() != ']') {
@@ -1566,10 +1596,10 @@ RegExpParser<CharT>::ParseCharacterClass()
                 break;
             } else if (current() == ']') {
                 if (unicode_) {
-                    AddCharOrEscapeUnicode(alloc, ranges, lead_ranges, trail_ranges, wide_ranges,
+                    AddCharOrEscapeUnicode(zone(), ranges, lead_ranges, trail_ranges, wide_ranges,
                                            char_class, first, ignore_case_);
                 } else {
-                    AddCharOrEscape(alloc, ranges, char_class, first);
+                    AddCharOrEscape(zone(), ranges, char_class, first);
                 }
                 ranges->append(CharacterRange::Singleton('-'));
                 break;
@@ -1583,23 +1613,23 @@ RegExpParser<CharT>::ParseCharacterClass()
                     return ReportError(JSMSG_RANGE_WITH_CLASS_ESCAPE);
 
                 // Either end is an escaped character class. Treat the '-' verbatim.
-                AddCharOrEscape(alloc, ranges, char_class, first);
+                AddCharOrEscape(zone(), ranges, char_class, first);
                 ranges->append(CharacterRange::Singleton('-'));
-                AddCharOrEscape(alloc, ranges, char_class_2, next);
+                AddCharOrEscape(zone(), ranges, char_class_2, next);
                 continue;
             }
             if (first > next)
                 return ReportError(JSMSG_BAD_CLASS_RANGE);
             if (unicode_)
-                AddUnicodeRange(alloc, ranges, lead_ranges, trail_ranges,wide_ranges, first, next);
+                AddUnicodeRange(zone(), ranges, lead_ranges, trail_ranges,wide_ranges, first, next);
             else
                 ranges->append(CharacterRange::Range(first, next));
         } else {
             if (unicode_) {
-                AddCharOrEscapeUnicode(alloc, ranges, lead_ranges, trail_ranges, wide_ranges,
+                AddCharOrEscapeUnicode(zone(), ranges, lead_ranges, trail_ranges, wide_ranges,
                                        char_class, first, ignore_case_);
             } else {
-                AddCharOrEscape(alloc, ranges, char_class, first);
+                AddCharOrEscape(zone(), ranges, char_class, first);
             }
         }
     }
@@ -1611,17 +1641,17 @@ RegExpParser<CharT>::ParseCharacterClass()
             ranges->append(CharacterRange::Everything());
             is_negated = !is_negated;
         }
-        return alloc->newInfallible<RegExpCharacterClass>(ranges, is_negated);
+        return zone_->newInfallible<RegExpCharacterClass>(ranges, is_negated);
     }
 
     if (!is_negated && ranges->length() == 0 && lead_ranges->length() == 0 &&
         trail_ranges->length() == 0 && wide_ranges->length() == 0)
     {
         ranges->append(CharacterRange::Everything());
-        return alloc->newInfallible<RegExpCharacterClass>(ranges, true);
+        return zone_->newInfallible<RegExpCharacterClass>(ranges, true);
     }
 
-    return UnicodeRangesAtom(alloc, ranges, lead_ranges, trail_ranges, wide_ranges, is_negated,
+    return UnicodeRangesAtom(zone(), ranges, lead_ranges, trail_ranges, wide_ranges, is_negated,
                              ignore_case_);
 }
 
@@ -1716,87 +1746,74 @@ RegExpParser<CharT>::ParseRawSurrogatePair(char16_t* lead, char16_t* trail)
 // ----------------------------------------------------------------------------
 // RegExpBuilder
 
-RegExpBuilder::RegExpBuilder(LifoAlloc* alloc)
-  : alloc(alloc),
+RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
+  : zone_(zone),
     pending_empty_(false),
+    ignore_case_(ignore_case),
+    unicode_(unicode),
     characters_(nullptr)
 #ifdef DEBUG
   , last_added_(ADD_NONE)
 #endif
 {}
 
-void
-RegExpBuilder::FlushCharacters()
-{
+void RegExpBuilder::FlushCharacters() {
     pending_empty_ = false;
     if (characters_ != nullptr) {
-        RegExpTree* atom = alloc->newInfallible<RegExpAtom>(characters_);
+        RegExpTree* atom = zone()->newInfallible<RegExpAtom>(characters_);
         characters_ = nullptr;
-        text_.Add(alloc, atom);
+        text_.Add(atom, zone());
 #ifdef DEBUG
         last_added_ = ADD_ATOM;
 #endif
     }
 }
 
-void
-RegExpBuilder::FlushText()
-{
+void RegExpBuilder::FlushText() {
     FlushCharacters();
     int num_text = text_.length();
-    if (num_text == 0)
+    if (num_text == 0) {
         return;
-    if (num_text == 1) {
-        terms_.Add(alloc, text_.last());
+    } else if (num_text == 1) {
+        terms_.Add(text_.last(), zone());
     } else {
-        RegExpText* text = alloc->newInfallible<RegExpText>(alloc);
-        for (int i = 0; i < num_text; i++)
-            text_.Get(i)->AppendToText(text, alloc);
-        terms_.Add(alloc, text);
+        RegExpText* text = zone()->newInfallible<RegExpText>(zone());
+        for (int i = 0; i < num_text; i++) text_.Get(i)->AppendToText(text, zone());
+        terms_.Add(text, zone());
     }
     text_.Clear();
 }
 
-void
-RegExpBuilder::AddCharacter(char16_t c)
-{
+void RegExpBuilder::AddCharacter(uc16 c) {
     pending_empty_ = false;
     if (characters_ == nullptr)
-        characters_ = alloc->newInfallible<CharacterVector>(*alloc);
+        characters_ = zone()->newInfallible<CharacterVector>(*zone());
     characters_->append(c);
 #ifdef DEBUG
     last_added_ = ADD_CHAR;
 #endif
 }
 
-void
-RegExpBuilder::AddEmpty()
-{
-    pending_empty_ = true;
-}
+void RegExpBuilder::AddEmpty() { pending_empty_ = true; }
 
-void
-RegExpBuilder::AddAtom(RegExpTree* term)
-{
+void RegExpBuilder::AddAtom(RegExpTree* term) {
     if (term->IsEmpty()) {
         AddEmpty();
         return;
     }
     if (term->IsTextElement()) {
         FlushCharacters();
-        text_.Add(alloc, term);
+        text_.Add(term, zone());
     } else {
         FlushText();
-        terms_.Add(alloc, term);
+        terms_.Add(term, zone());
     }
 #ifdef DEBUG
     last_added_ = ADD_ATOM;
 #endif
 }
 
-void
-RegExpBuilder::AddAssertion(RegExpTree* assert)
-{
+void RegExpBuilder::AddAssertion(RegExpTree* assert) {
     FlushText();
     if (terms_.length() > 0 && terms_.last()->IsAssertion()) {
         // Omit repeated assertions of the same type.
@@ -1804,58 +1821,45 @@ RegExpBuilder::AddAssertion(RegExpTree* assert)
         RegExpAssertion* next = assert->AsAssertion();
         if (last->assertion_type() == next->assertion_type()) return;
     }
-    terms_.Add(alloc, assert);
+    terms_.Add(assert, zone());
 #ifdef DEBUG
     last_added_ = ADD_ASSERT;
 #endif
 }
 
-void
-RegExpBuilder::NewAlternative()
-{
-    FlushTerms();
-}
+void RegExpBuilder::NewAlternative() { FlushTerms(); }
 
-void
-RegExpBuilder::FlushTerms()
-{
+void RegExpBuilder::FlushTerms() {
     FlushText();
     int num_terms = terms_.length();
     RegExpTree* alternative;
-    if (num_terms == 0)
+    if (num_terms == 0) {
         alternative = RegExpEmpty::GetInstance();
-    else if (num_terms == 1)
+    } else if (num_terms == 1) {
         alternative = terms_.last();
-    else
-        alternative = alloc->newInfallible<RegExpAlternative>(terms_.GetList(alloc));
-    alternatives_.Add(alloc, alternative);
+    } else {
+        alternative = zone()->newInfallible<RegExpAlternative>(terms_.GetList(zone()));
+    }
+    alternatives_.Add(alternative, zone());
     terms_.Clear();
 #ifdef DEBUG
     last_added_ = ADD_NONE;
 #endif
 }
 
-RegExpTree*
-RegExpBuilder::ToRegExp()
-{
+RegExpTree* RegExpBuilder::ToRegExp() {
     FlushTerms();
     int num_alternatives = alternatives_.length();
-    if (num_alternatives == 0) {
-        return RegExpEmpty::GetInstance();
-    }
-    if (num_alternatives == 1) {
-        return alternatives_.last();
-    }
-    return alloc->newInfallible<RegExpDisjunction>(alternatives_.GetList(alloc));
+    if (num_alternatives == 0) return RegExpEmpty::GetInstance();
+    if (num_alternatives == 1) return alternatives_.last();
+    return zone()->newInfallible<RegExpDisjunction>(alternatives_.GetList(zone()));
 }
 
-void
-RegExpBuilder::AddQuantifierToAtom(int min, int max,
-                                   RegExpQuantifier::QuantifierType quantifier_type)
-{
+bool RegExpBuilder::AddQuantifierToAtom(int min, int max,
+        RegExpQuantifier::QuantifierType quantifier_type) {
     if (pending_empty_) {
         pending_empty_ = false;
-        return;
+        return true;
     }
     RegExpTree* atom;
     if (characters_ != nullptr) {
@@ -1864,14 +1868,14 @@ RegExpBuilder::AddQuantifierToAtom(int min, int max,
         CharacterVector* char_vector = characters_;
         int num_chars = char_vector->length();
         if (num_chars > 1) {
-            CharacterVector* prefix = alloc->newInfallible<CharacterVector>(*alloc);
+            CharacterVector* prefix = zone()->newInfallible<CharacterVector>(*zone());
             prefix->append(char_vector->begin(), num_chars - 1);
-            text_.Add(alloc, alloc->newInfallible<RegExpAtom>(prefix));
-            char_vector = alloc->newInfallible<CharacterVector>(*alloc);
+            text_.Add(zone()->newInfallible<RegExpAtom>(prefix), zone());
+            char_vector = zone()->newInfallible<CharacterVector>(*zone());
             char_vector->append((*characters_)[num_chars - 1]);
         }
         characters_ = nullptr;
-        atom = alloc->newInfallible<RegExpAtom>(char_vector);
+        atom = zone()->newInfallible<RegExpAtom>(char_vector);
         FlushText();
     } else if (text_.length() > 0) {
         DCHECK(last_added_ == ADD_ATOM);
@@ -1885,19 +1889,22 @@ RegExpBuilder::AddQuantifierToAtom(int min, int max,
 #ifdef DEBUG
             last_added_ = ADD_TERM;
 #endif
-            if (min == 0)
-                return;
-            terms_.Add(alloc, atom);
-            return;
+            if (min == 0) {
+                return true;
+            }
+            terms_.Add(atom, zone());
+            return true;
         }
     } else {
         // Only call immediately after adding an atom or character!
         MOZ_CRASH("Bad call");
     }
-    terms_.Add(alloc, alloc->newInfallible<RegExpQuantifier>(min, max, quantifier_type, atom));
+    terms_.Add(zone()->newInfallible<RegExpQuantifier>(min, max, quantifier_type, atom),
+               zone());
 #ifdef DEBUG
     last_added_ = ADD_TERM;
 #endif
+    return true;
 }
 
 template class irregexp::RegExpParser<Latin1Char>;

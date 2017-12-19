@@ -67,8 +67,7 @@ ParsePatternSyntax(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc,
 // allocated.
 // Elements must not be nullptr pointers.
 template <typename T, int initial_size>
-class BufferedVector
-{
+class BufferedVector {
   public:
     typedef InfallibleVector<T*, 1> VectorType;
 
@@ -77,10 +76,10 @@ class BufferedVector
     // Adds element at end of list. This element is buffered and can
     // be read using last() or removed using RemoveLast until a new Add or until
     // RemoveLast or GetList has been called.
-    void Add(LifoAlloc* alloc, T* value) {
+    void Add(T* value, Zone* zone) {
         if (last_ != nullptr) {
             if (list_ == nullptr) {
-                list_ = alloc->newInfallible<VectorType>(*alloc);
+                list_ = zone->newInfallible<VectorType>(*zone);
                 list_->reserve(initial_size);
             }
             list_->append(last_);
@@ -113,7 +112,7 @@ class BufferedVector
                 DCHECK(last_ != nullptr);
                 return last_;
             } else {
-                return (*list_)[i];
+                return list_->at(i);
             }
         }
     }
@@ -128,9 +127,9 @@ class BufferedVector
         return length + ((last_ == nullptr) ? 0 : 1);
     }
 
-    VectorType* GetList(LifoAlloc* alloc) {
+    VectorType* GetList(Zone* zone) {
         if (list_ == nullptr)
-            list_ = alloc->newInfallible<VectorType>(*alloc);
+            list_ = zone->newInfallible<VectorType>(*zone);
         if (last_ != nullptr) {
             list_->append(last_);
             last_ = nullptr;
@@ -145,53 +144,68 @@ class BufferedVector
 
 
 // Accumulates RegExp atoms and assertions into lists of terms and alternatives.
-class RegExpBuilder
-{
+class RegExpBuilder {
   public:
-    explicit RegExpBuilder(LifoAlloc* alloc);
-    void AddCharacter(char16_t character);
+    RegExpBuilder(Zone* zone, bool ignore_case, bool unicode);
+    void AddCharacter(uc16 character);
+    void AddUnicodeCharacter(uc32 character);
+    void AddEscapedUnicodeCharacter(uc32 character);
     // "Adds" an empty expression. Does nothing except consume a
     // following quantifier
     void AddEmpty();
+    void AddCharacterClass(RegExpCharacterClass* cc);
+    void AddCharacterClassForDesugaring(uc32 c);
     void AddAtom(RegExpTree* tree);
+    void AddTerm(RegExpTree* tree);
     void AddAssertion(RegExpTree* tree);
     void NewAlternative();  // '|'
-    void AddQuantifierToAtom(int min, int max, RegExpQuantifier::QuantifierType type);
+    bool AddQuantifierToAtom(int min, int max,
+                             RegExpQuantifier::QuantifierType type);
     RegExpTree* ToRegExp();
 
   private:
+    static const uc16 kNoPendingSurrogate = 0;
+    void AddLeadSurrogate(uc16 lead_surrogate);
+    void AddTrailSurrogate(uc16 trail_surrogate);
+    void FlushPendingSurrogate();
     void FlushCharacters();
     void FlushText();
     void FlushTerms();
+    bool NeedsDesugaringForUnicode(RegExpCharacterClass* cc);
+    bool NeedsDesugaringForIgnoreCase(uc32 c);
+    Zone* zone() const { return zone_; }
+    bool ignore_case() const { return ignore_case_; }
+    bool unicode() const { return unicode_; }
 
-    LifoAlloc* alloc;
+    Zone* zone_;
     bool pending_empty_;
+    bool ignore_case_;
+    bool unicode_;
     CharacterVector* characters_;
+    uc16 pending_surrogate_;
     BufferedVector<RegExpTree, 2> terms_;
     BufferedVector<RegExpTree, 2> text_;
     BufferedVector<RegExpTree, 2> alternatives_;
 
-    enum LastAdded {
-        ADD_NONE, ADD_CHAR, ADD_TERM, ADD_ASSERT, ADD_ATOM
-    };
 #ifdef DEBUG
-    LastAdded last_added_;
+    enum { ADD_NONE, ADD_CHAR, ADD_TERM, ADD_ASSERT, ADD_ATOM } last_added_;
 #endif
 };
 
+// TODO(anba): remove this typedef
 // Characters parsed by RegExpParser can be either char16_t or kEndMarker.
 typedef uint32_t widechar;
 
 template <typename CharT>
-class RegExpParser
-{
+class RegExpParser {
   public:
-    RegExpParser(frontend::TokenStreamAnyChars& ts, LifoAlloc* alloc,
-                 const CharT* chars, const CharT* end, bool multiline_mode, bool unicode,
+    RegExpParser(frontend::TokenStreamAnyChars& ts, Zone* zone,
+                 const CharT* chars, const CharT* end, bool multiline, bool unicode,
                  bool ignore_case);
 
     RegExpTree* ParsePattern();
     RegExpTree* ParseDisjunction();
+    RegExpTree* ParseGroup();
     RegExpTree* ParseCharacterClass();
 
     // Parses a {...,...} quantifier and stores the range in the given
@@ -202,23 +216,33 @@ class RegExpParser
     // it stores the result in the output parameter and returns true.
     // Otherwise it throws an error and returns false.  The character must not
     // be 'b' or 'B' since they are usually handled specially.
-    bool ParseClassCharacterEscape(widechar* code);
+    bool ParseClassCharacterEscape(uc32* code);
 
     // Checks whether the following is a length-digit hexadecimal number,
     // and sets the value if it is.
-    bool ParseHexEscape(int length, widechar* value);
+    bool ParseHexEscape(int length, uc32* value);
+    bool ParseUnicodeEscape(uc32* value);
+    bool ParseUnlimitedLengthHexNumber(int max_value, uc32* value);
 
     bool ParseBracedHexEscape(widechar* value);
     bool ParseTrailSurrogate(widechar* value);
     bool ParseRawSurrogatePair(char16_t* lead, char16_t* trail);
 
-    widechar ParseOctalLiteral();
+    uc32 ParseOctalLiteral();
 
     // Tries to parse the input as a back reference.  If successful it
     // stores the result in the output parameter and returns true.  If
     // it fails it will push back the characters read so the same characters
     // can be reparsed.
     bool ParseBackReferenceIndex(int* index_out);
+
+    // Parse inside a class. Either add escaped class to the range, or return
+    // false and pass parsed single character through |char_out|.
+    void ParseClassEscape(CharacterRangeVector* ranges, Zone* zone,
+                          bool add_unicode_case_equivalents, uc32* char_out,
+                          bool* is_class_escape);
+
+    char ParseClassEscape();
 
     bool ParseClassAtom(char16_t* char_class, widechar *value);
 
@@ -242,33 +266,41 @@ class RegExpParser
 
     // Reports whether the pattern might be used as a literal search string.
     // Only use if the result of the parse is a single atom node.
-    bool simple() { return simple_; }
+    bool simple();
     bool contains_anchor() { return contains_anchor_; }
     void set_contains_anchor() { contains_anchor_ = true; }
     int captures_started() { return captures_ == nullptr ? 0 : captures_->length(); }
     const CharT* position() { return next_pos_ - 1; }
+    bool ignore_case() const { return ignore_case_; }
+    bool multiline() const { return multiline_; }
+    bool unicode() const { return unicode_; }
+
+    static bool IsSyntaxCharacterOrSlash(uc32 c);
 
     static const int kMaxCaptures = 1 << 16;
-    static const widechar kEndMarker = (1 << 21);
+    static const uc32 kEndMarker = (1 << 21);
 
   private:
     enum SubexpressionType {
         INITIAL,
         CAPTURE,  // All positive values represent captures.
-        POSITIVE_LOOKAHEAD,
-        NEGATIVE_LOOKAHEAD,
+        POSITIVE_LOOKAROUND,
+        NEGATIVE_LOOKAROUND,
         GROUPING
     };
 
     class RegExpParserState {
       public:
-        RegExpParserState(LifoAlloc* alloc,
-                          RegExpParserState* previous_state,
+        RegExpParserState(RegExpParserState* previous_state,
                           SubexpressionType group_type,
-                          int disjunction_capture_index)
+                          RegExpLookaround::Type lookaround_type,
+                          int disjunction_capture_index,
+                          bool ignore_case,
+                          bool unicode, Zone* zone)
             : previous_state_(previous_state),
-              builder_(alloc->newInfallible<RegExpBuilder>(alloc)),
+              builder_(zone->newInfallible<RegExpBuilder>(zone, ignore_case, unicode)),
               group_type_(group_type),
+              lookaround_type_(lookaround_type),
               disjunction_capture_index_(disjunction_capture_index)
         {}
         // Parser state of containing expression, if any.
@@ -278,10 +310,15 @@ class RegExpParser
         RegExpBuilder* builder() { return builder_; }
         // Type of regexp being parsed (parenthesized group or entire regexp).
         SubexpressionType group_type() { return group_type_; }
+        // Lookahead or Lookbehind.
+        RegExpLookaround::Type lookaround_type() { return lookaround_type_; }
         // Index in captures array of first capture in this sub-expression, if any.
         // Also the capture index of this sub-expression itself, if group_type
         // is CAPTURE.
         int capture_index() { return disjunction_capture_index_; }
+
+        // Check whether the parser is inside a capture group with the given index.
+        bool IsInsideCaptureGroup(int index);
 
       private:
         // Linked list implementation of stack of states.
@@ -290,33 +327,41 @@ class RegExpParser
         RegExpBuilder* builder_;
         // Stored disjunction type (capture, look-ahead or grouping), if any.
         SubexpressionType group_type_;
+        // Stored read direction.
+        RegExpLookaround::Type lookaround_type_;
         // Stored disjunction's capture index (if any).
         int disjunction_capture_index_;
     };
 
-    widechar current() { return current_; }
+    // Return the 1-indexed RegExpCapture object, allocate if necessary.
+    RegExpCapture* GetCapture(int index);
+
+    Zone* zone() const { return zone_; }
+
+    uc32 current() { return current_; }
     bool has_more() { return has_more_; }
     bool has_next() { return next_pos_ < end_; }
-    widechar Next() {
+    uc32 Next() {
         if (has_next())
             return *next_pos_;
         return kEndMarker;
     }
+    template <bool update_position>
+    uc32 ReadNext();
     void ScanForCaptures();
 
     frontend::TokenStreamAnyChars& ts;
-    LifoAlloc* alloc;
+    Zone* zone_;
     RegExpCaptureVector* captures_;
     const CharT* const start_;
     const CharT* next_pos_;
     const CharT* end_;
-    widechar current_;
-    // The capture count is only valid after we have scanned for captures.
-    int capture_count_;
-    bool has_more_;
+    uc32 current_;
+    bool ignore_case_;
     bool multiline_;
     bool unicode_;
-    bool ignore_case_;
+    int capture_count_;  // Only valid after we have scanned for captures.
+    bool has_more_;
     bool simple_;
     bool contains_anchor_;
     bool is_scanned_for_captures_;

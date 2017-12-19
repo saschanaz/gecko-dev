@@ -57,7 +57,7 @@ namespace irregexp {
 
 // TODO(anba): Decide on types.
 using uc16 = char16_t; // upstream: uint16_t
-using uc32 = char16_t; // upstream: int32_t
+using uc32 = uint32_t; // upstream: int32_t
 
 constexpr int32_t kMinInt = INT32_MIN;
 constexpr int32_t kMaxInt = INT32_MAX;

@@ -32,7 +32,7 @@
 #define V8_REGEXP_AST_H_
 
 #include "mozilla/EnumSet.h"
-#include "ds/LifoAlloc.h"
+
 #include "irregexp/RegExpTypes.h"
 
 // Prevent msvc build failures as indicated in bug 1205328
@@ -135,7 +135,7 @@ class CharacterRange {
         return CharacterRange(from, to);
     }
     static inline CharacterRange Everything() {
-        return CharacterRange(0, String::kMaxCodePoint);
+        return CharacterRange(0, String::kMaxUtf16CodeUnit);
     }
     static inline CharacterRangeVector* List(Zone* zone,
                                              CharacterRange range) {
