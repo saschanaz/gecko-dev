@@ -253,6 +253,8 @@ class QuickCheckDetails {
     bool cannot_match_;
 };
 
+extern int kUninitializedRegExpNodePlaceHolder;
+
 class RegExpNode {
   public:
     explicit RegExpNode(Zone* zone)
@@ -278,6 +280,7 @@ class RegExpNode {
     // Falls through on certain failure, jumps to the label on possible success.
     // If the node cannot make a quick check it does nothing and returns false.
     bool EmitQuickCheck(RegExpCompiler* compiler,
+                        Trace* bounds_check_trace,
                         Trace* trace,
                         bool preload_has_checked_bounds,
                         jit::Label* on_possible_success,
@@ -776,6 +779,22 @@ class ChoiceNode : public RegExpNode {
                                    AlternativeGeneration* alt_gen,
                                    int preload_characters,
                                    bool next_expects_preload);
+    void SetUpPreLoad(RegExpCompiler* compiler,
+                      Trace* current_trace,
+                      PreloadState* preloads);
+    void AssertGuardsMentionRegisters(Trace* trace);
+    int EmitOptimizedUnanchoredSearch(RegExpCompiler* compiler, Trace* trace);
+    Trace* EmitGreedyLoop(RegExpCompiler* compiler,
+                          Trace* trace,
+                          AlternativeGenerationList* alt_gens,
+                          PreloadState* preloads,
+                          GreedyLoopState* greedy_loop_state,
+                          int text_length);
+    void EmitChoices(RegExpCompiler* compiler,
+                     AlternativeGenerationList* alt_gens,
+                     int first_choice,
+                     Trace* trace,
+                     PreloadState* preloads);
 
     // If true, this node is never checked at the start of the input.
     // Allows a new trace to start with at_start() set to false.
@@ -1167,6 +1186,30 @@ class Trace {
     QuickCheckDetails quick_check_performed_;
     int flush_budget_;
     TriBool at_start_;
+};
+
+class GreedyLoopState {
+  public:
+    explicit GreedyLoopState(bool not_at_start);
+
+    jit::Label* label() { return &label_; }
+    Trace* counter_backtrack_trace() { return &counter_backtrack_trace_; }
+
+  private:
+    jit::Label label_;
+    Trace counter_backtrack_trace_;
+};
+
+
+struct PreloadState {
+    static const int kEatsAtLeastNotYetInitialized = -1;
+    bool preload_is_current_;
+    bool preload_has_checked_bounds_;
+    int preload_characters_;
+    int eats_at_least_;
+    void init() {
+      eats_at_least_ = kEatsAtLeastNotYetInitialized;
+    }
 };
 
 class NodeVisitor {
