@@ -1359,12 +1359,12 @@ def make_irregexp_tables(version,
             println('    {}, {} + 1, // {}'.format(hex4(start), hex4(end),
                                                                '{}..{}'.format(s_name, e_name)
                                                                if start != end else s_name))
-        println('    {} + 1'.format(hex4(MAX_BMP)))
+        println('    kRangeEndMarker')
         println('};')
         println('const int js::irregexp::k{}RangeCount = {};'.format(name,
                                                                      len(char_ranges) * 2 + 1))
 
-    def write_character_test(println, test, consequent, default):
+    def write_character_test(println, is_unicode, test, consequent, default):
         # Latin1 characters which, when case-mapped through
         # String.prototype.toUpperCase(), canonicalize to a non-Latin1 character.
         # ES2017, §21.2.2.8.2 Runtime Semantics: Canonicalize
@@ -1383,18 +1383,17 @@ def make_irregexp_tables(version,
         # ES2017, §21.2.2.8.2 Runtime Semantics: Canonicalize
         casefolded_to_latin1 = ifilter(casefolds_to_latin1, xrange(MAX_LATIN1 + 1, MAX_BMP + 1))
 
-        println('    if (unicode) {')
-        for ch in casefolded_to_latin1:
-            casefolded = casefold(ch)
-            # Skip if also handled below for case mapping.
-            if casefolded in casemap_for_latin1 and ch in casemap_for_latin1[casefolded]:
-                continue
-            println('        // "{}" case folds to "{}".'.format(char_name(ch),
-                                                                 char_name(casefolded)))
-            println('        if ({})'.format(test(ch)))
-            println('            return {};'.format(consequent(casefolded)))
-        println('    }')
-        println('')
+        if is_unicode:
+            for ch in casefolded_to_latin1:
+                casefolded = casefold(ch)
+                # Skip if also handled below for case mapping.
+                if casefolded in casemap_for_latin1 and ch in casemap_for_latin1[casefolded]:
+                    continue
+                println('    // "{}" case folds to "{}".'.format(char_name(ch),
+                                                                     char_name(casefolded)))
+                println('    if ({})'.format(test(ch)))
+                println('        return {};'.format(consequent(casefolded)))
+
         for (ch, casemapped_chars) in casemap_for_latin1.iteritems():
             for casemapped in casemapped_chars:
                 println('    // "{}" case maps to "{}".'.format(char_name(casemapped),
@@ -1419,10 +1418,21 @@ def make_irregexp_tables(version,
         println('')
 
         println('static inline bool')
-        println('RangeContainsLatin1Equivalents(CharacterRange range, bool unicode)')
+        println('RangeContainsLatin1Equivalents(CharacterRange range)')
         println('{')
-        write_character_test(println, lambda ch: 'range.Contains({})'.format(hex4(ch)),
-                             lambda _: 'true', 'false')
+        write_character_test(println, False,
+                             lambda ch: 'range.Contains({})'.format(hex4(ch)),
+                             lambda _: 'true',
+                             'false')
+        println('}')
+
+        println('static inline bool')
+        println('RangeContainsLatin1EquivalentsUnicode(CharacterRange range)')
+        println('{')
+        write_character_test(println, True,
+                             lambda ch: 'range.Contains({})'.format(hex4(ch)),
+                             lambda _: 'true',
+                             'false')
         println('}')
 
         println('')
@@ -1461,11 +1471,27 @@ def make_irregexp_tables(version,
         println('')
 
         println('char16_t')
-        println('js::irregexp::ConvertNonLatin1ToLatin1(char16_t c, bool unicode)')
+        println('js::irregexp::ConvertNonLatin1ToLatin1(char16_t c)')
         println('{')
         println('    MOZ_ASSERT(c > {}, "Character mustn\'t be Latin1");'.format(hex2(MAX_LATIN1)))
-        write_character_test(println, lambda ch: 'c == {}'.format(hex4(ch)), hex2, '0')
+        write_character_test(println, False,
+                             lambda ch: 'c == {}'.format(hex4(ch)),
+                             hex2,
+                             '0')
         println('}')
+
+        println('char16_t')
+        println('js::irregexp::ConvertNonLatin1ToLatin1Unicode(char16_t c)')
+        println('{')
+        println('    MOZ_ASSERT(c > {}, "Character mustn\'t be Latin1");'.format(hex2(MAX_LATIN1)))
+        write_character_test(println, True,
+                             lambda ch: 'c == {}'.format(hex4(ch)),
+                             hex2,
+                             '0')
+        println('}')
+        println('')
+
+        println('static constexpr int kRangeEndMarker = 0x110000;')
 
         character_range('Space', space_chars)
         character_range('SpaceAndSurrogate', space_chars + surrogate_chars)

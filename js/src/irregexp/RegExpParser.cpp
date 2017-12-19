@@ -57,7 +57,7 @@ IsInRange(int value, int lower_limit, int higher_limit)
 }
 
 inline bool
-IsDecimalDigit(widechar c)
+IsDecimalDigit(uc32 c)
 {
     // ECMA-262, 3rd, 7.8.3 (p 16)
     return IsInRange(c, '0', '9');
@@ -75,530 +75,6 @@ HexValue(uint32_t c)
     return -1;
 }
 
-// ----------------------------------------------------------------------------
-// SpiderMonkey implementation for Unicode RegExps
-
-static inline RegExpTree*
-RangeAtom(LifoAlloc* alloc, char16_t from, char16_t to)
-{
-    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    ranges->append(CharacterRange::Range(from, to));
-    return alloc->newInfallible<RegExpCharacterClass>(ranges);
-}
-
-static inline RegExpTree*
-NegativeLookahead(LifoAlloc* alloc, char16_t from, char16_t to)
-{
-    return alloc->newInfallible<RegExpLookaround>(RangeAtom(alloc, from, to), false, 0, 0,
-                                                  RegExpLookaround::LOOKAHEAD);
-}
-
-class WideCharRange
-{
-  public:
-    WideCharRange()
-      : from_(0), to_(0)
-    {}
-
-    WideCharRange(widechar from, widechar to)
-      : from_(from), to_(to)
-    {}
-
-    static inline WideCharRange Singleton(widechar value) {
-        return WideCharRange(value, value);
-    }
-    static inline WideCharRange Range(widechar from, widechar to) {
-        MOZ_ASSERT(from <= to);
-        return WideCharRange(from, to);
-    }
-
-    bool Contains(widechar i) const { return from_ <= i && i <= to_; }
-    widechar from() const { return from_; }
-    widechar to() const { return to_; }
-
-  private:
-    widechar from_;
-    widechar to_;
-};
-
-typedef InfallibleVector<WideCharRange, 1> WideCharRangeVector;
-
-static inline CharacterRange
-LeadSurrogateRange()
-{
-    return CharacterRange::Range(unicode::LeadSurrogateMin, unicode::LeadSurrogateMax);
-}
-
-static inline CharacterRange
-TrailSurrogateRange()
-{
-    return CharacterRange::Range(unicode::TrailSurrogateMin, unicode::TrailSurrogateMax);
-}
-
-static inline WideCharRange
-NonBMPRange()
-{
-    return WideCharRange::Range(unicode::NonBMPMin, unicode::NonBMPMax);
-}
-
-static const char16_t kNoCharClass = 0;
-
-// Adds a character or pre-defined character class to character ranges.
-// If char_class is not kInvalidClass, it's interpreted as a class
-// escape (i.e., 's' means whitespace, from '\s').
-static inline void
-AddCharOrEscape(LifoAlloc* alloc,
-                CharacterRangeVector* ranges,
-                char16_t char_class,
-                widechar c)
-{
-    if (char_class != kNoCharClass)
-        CharacterRange::AddClassEscape(char_class, ranges, alloc);
-    else
-        ranges->append(CharacterRange::Singleton(c));
-}
-
-static inline void
-AddCharOrEscapeUnicode(LifoAlloc* alloc,
-                       CharacterRangeVector* ranges,
-                       CharacterRangeVector* lead_ranges,
-                       CharacterRangeVector* trail_ranges,
-                       WideCharRangeVector* wide_ranges,
-                       char16_t char_class,
-                       widechar c,
-                       bool ignore_case)
-{
-    if (char_class != kNoCharClass) {
-        CharacterRange::AddClassEscapeUnicode(char_class, ranges, ignore_case, alloc);
-        switch (char_class) {
-          case 'S':
-          case 'W':
-          case 'D':
-            lead_ranges->append(LeadSurrogateRange());
-            trail_ranges->append(TrailSurrogateRange());
-            wide_ranges->append(NonBMPRange());
-            break;
-          case '.':
-            MOZ_CRASH("Bad char_class!");
-        }
-        return;
-    }
-
-    if (unicode::IsLeadSurrogate(c))
-        lead_ranges->append(CharacterRange::Singleton(c));
-    else if (unicode::IsTrailSurrogate(c))
-        trail_ranges->append(CharacterRange::Singleton(c));
-    else if (c >= unicode::NonBMPMin)
-        wide_ranges->append(WideCharRange::Singleton(c));
-    else
-        ranges->append(CharacterRange::Singleton(c));
-}
-
-static inline void
-AddUnicodeRange(LifoAlloc* alloc,
-                CharacterRangeVector* ranges,
-                CharacterRangeVector* lead_ranges,
-                CharacterRangeVector* trail_ranges,
-                WideCharRangeVector* wide_ranges,
-                widechar first,
-                widechar next)
-{
-    MOZ_ASSERT(first <= next);
-    if (first < unicode::LeadSurrogateMin) {
-        if (next < unicode::LeadSurrogateMin) {
-            ranges->append(CharacterRange::Range(first, next));
-            return;
-        }
-        ranges->append(CharacterRange::Range(first, unicode::LeadSurrogateMin - 1));
-        first = unicode::LeadSurrogateMin;
-    }
-    if (first <= unicode::LeadSurrogateMax) {
-        if (next <= unicode::LeadSurrogateMax) {
-            lead_ranges->append(CharacterRange::Range(first, next));
-            return;
-        }
-        lead_ranges->append(CharacterRange::Range(first, unicode::LeadSurrogateMax));
-        first = unicode::LeadSurrogateMax + 1;
-    }
-    MOZ_ASSERT(unicode::LeadSurrogateMax + 1 == unicode::TrailSurrogateMin);
-    if (first <= unicode::TrailSurrogateMax) {
-        if (next <= unicode::TrailSurrogateMax) {
-            trail_ranges->append(CharacterRange::Range(first, next));
-            return;
-        }
-        trail_ranges->append(CharacterRange::Range(first, unicode::TrailSurrogateMax));
-        first = unicode::TrailSurrogateMax + 1;
-    }
-    if (first <= unicode::UTF16Max) {
-        if (next <= unicode::UTF16Max) {
-            ranges->append(CharacterRange::Range(first, next));
-            return;
-        }
-        ranges->append(CharacterRange::Range(first, unicode::UTF16Max));
-        first = unicode::NonBMPMin;
-    }
-    MOZ_ASSERT(unicode::UTF16Max + 1 == unicode::NonBMPMin);
-    wide_ranges->append(WideCharRange::Range(first, next));
-}
-
-// Negate a vector of ranges by subtracting its ranges from a range
-// encompassing the full range of possible values.
-template <typename RangeType>
-static inline void
-NegateUnicodeRanges(LifoAlloc* alloc, InfallibleVector<RangeType, 1>** ranges,
-                    RangeType full_range)
-{
-    typedef InfallibleVector<RangeType, 1> RangeVector;
-    RangeVector* tmp_ranges = alloc->newInfallible<RangeVector>(*alloc);
-    tmp_ranges->append(full_range);
-    RangeVector* result_ranges = alloc->newInfallible<RangeVector>(*alloc);
-
-    // Perform the following calculation:
-    //   result_ranges = tmp_ranges - ranges
-    // with the following steps:
-    //   result_ranges = tmp_ranges - ranges[0]
-    //   SWAP(result_ranges, tmp_ranges)
-    //   result_ranges = tmp_ranges - ranges[1]
-    //   SWAP(result_ranges, tmp_ranges)
-    //   ...
-    //   result_ranges = tmp_ranges - ranges[N-1]
-    //   SWAP(result_ranges, tmp_ranges)
-    // The last SWAP is just for simplicity of the loop.
-    for (int i = 0; i < (*ranges)->length(); i++) {
-        result_ranges->clear();
-
-        const RangeType& range = (**ranges)[i];
-        for (int j = 0; j < tmp_ranges->length(); j++) {
-            const RangeType& tmpRange = (*tmp_ranges)[j];
-            auto from1 = tmpRange.from();
-            auto to1 = tmpRange.to();
-            auto from2 = range.from();
-            auto to2 = range.to();
-
-            if (from1 < from2) {
-                if (to1 < from2) {
-                    result_ranges->append(tmpRange);
-                } else if (to1 <= to2) {
-                    result_ranges->append(RangeType::Range(from1, from2 - 1));
-                } else {
-                    result_ranges->append(RangeType::Range(from1, from2 - 1));
-                    result_ranges->append(RangeType::Range(to2 + 1, to1));
-                }
-            } else if (from1 <= to2) {
-                if (to1 > to2)
-                    result_ranges->append(RangeType::Range(to2 + 1, to1));
-            } else {
-                result_ranges->append(tmpRange);
-            }
-        }
-
-        auto tmp = tmp_ranges;
-        tmp_ranges = result_ranges;
-        result_ranges = tmp;
-    }
-
-    // After the loop, result is pointed at by tmp_ranges, instead of
-    // result_ranges.
-    *ranges = tmp_ranges;
-}
-
-static bool
-WideCharRangesContain(WideCharRangeVector* wide_ranges, widechar c)
-{
-    for (int i = 0; i < wide_ranges->length(); i++) {
-        const WideCharRange& range = (*wide_ranges)[i];
-        if (range.Contains(c))
-            return true;
-    }
-    return false;
-}
-
-static void
-CalculateCaseInsensitiveRanges(LifoAlloc* alloc, widechar from, widechar to, int32_t diff,
-                               WideCharRangeVector* wide_ranges,
-                               WideCharRangeVector** tmp_wide_ranges)
-{
-    widechar contains_from = 0;
-    widechar contains_to = 0;
-    for (widechar c = from; c <= to; c++) {
-        if (WideCharRangesContain(wide_ranges, c) &&
-            !WideCharRangesContain(wide_ranges, c + diff))
-        {
-            if (contains_from == 0)
-                contains_from = c;
-            contains_to = c;
-        } else if (contains_from != 0) {
-            if (!*tmp_wide_ranges)
-                *tmp_wide_ranges = alloc->newInfallible<WideCharRangeVector>(*alloc);
-
-            (*tmp_wide_ranges)->append(WideCharRange::Range(contains_from + diff,
-                                                            contains_to + diff));
-            contains_from = 0;
-        }
-    }
-
-    if (contains_from != 0) {
-        if (!*tmp_wide_ranges)
-            *tmp_wide_ranges = alloc->newInfallible<WideCharRangeVector>(*alloc);
-
-        (*tmp_wide_ranges)->append(WideCharRange::Range(contains_from + diff,
-                                                        contains_to + diff));
-    }
-}
-
-static RegExpTree*
-UnicodeRangesAtom(LifoAlloc* alloc,
-                  CharacterRangeVector* ranges,
-                  CharacterRangeVector* lead_ranges,
-                  CharacterRangeVector* trail_ranges,
-                  WideCharRangeVector* wide_ranges,
-                  bool is_negated,
-                  bool ignore_case)
-{
-    // Calculate case folding for non-BMP first and negate the range if needed.
-    if (ignore_case) {
-        WideCharRangeVector* tmp_wide_ranges = nullptr;
-#define CALL_CALC(FROM, TO, LEAD, TRAIL_FROM, TRAIL_TO, DIFF) \
-        CalculateCaseInsensitiveRanges(alloc, FROM, TO, DIFF, wide_ranges, &tmp_wide_ranges);
-        FOR_EACH_NON_BMP_CASE_FOLDING(CALL_CALC)
-        FOR_EACH_NON_BMP_REV_CASE_FOLDING(CALL_CALC)
-#undef CALL_CALC
-
-        if (tmp_wide_ranges) {
-            for (int i = 0; i < tmp_wide_ranges->length(); i++)
-                wide_ranges->append((*tmp_wide_ranges)[i]);
-        }
-    }
-
-    if (is_negated) {
-        NegateUnicodeRanges(alloc, &lead_ranges, LeadSurrogateRange());
-        NegateUnicodeRanges(alloc, &trail_ranges, TrailSurrogateRange());
-        NegateUnicodeRanges(alloc, &wide_ranges, NonBMPRange());
-    }
-
-    bool unicode = true;
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
-
-    bool added = false;
-
-    if (is_negated) {
-        ranges->append(LeadSurrogateRange());
-        ranges->append(TrailSurrogateRange());
-    }
-    if (ranges->length() > 0) {
-        RegExpCharacterClass::Flags flags;
-        if (is_negated) flags = RegExpCharacterClass::NEGATED;
-        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges, flags));
-        added = true;
-    }
-
-    if (lead_ranges->length() > 0) {
-        if (added)
-            builder->NewAlternative();
-        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(lead_ranges));
-        builder->AddAtom(NegativeLookahead(alloc, unicode::TrailSurrogateMin,
-                                           unicode::TrailSurrogateMax));
-        added = true;
-    }
-
-    if (trail_ranges->length() > 0) {
-        if (added)
-            builder->NewAlternative();
-        builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(
-            RegExpAssertion::NOT_AFTER_LEAD_SURROGATE));
-        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(trail_ranges));
-        added = true;
-    }
-
-    for (int i = 0; i < wide_ranges->length(); i++) {
-        if (added)
-            builder->NewAlternative();
-
-        const WideCharRange& range = (*wide_ranges)[i];
-        widechar from = range.from();
-        widechar to = range.to();
-        char16_t from_lead, from_trail;
-        char16_t to_lead, to_trail;
-
-        unicode::UTF16Encode(from, &from_lead, &from_trail);
-        if (from == to) {
-            builder->AddCharacter(from_lead);
-            builder->AddCharacter(from_trail);
-        } else {
-            unicode::UTF16Encode(to, &to_lead, &to_trail);
-            if (from_lead == to_lead) {
-                MOZ_ASSERT(from_trail != to_trail);
-                builder->AddCharacter(from_lead);
-                builder->AddAtom(RangeAtom(alloc, from_trail, to_trail));
-            } else if (from_trail == unicode::TrailSurrogateMin &&
-                       to_trail == unicode::TrailSurrogateMax)
-            {
-                builder->AddAtom(RangeAtom(alloc, from_lead, to_lead));
-                builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin,
-                                           unicode::TrailSurrogateMax));
-            } else if (from_lead + 1 == to_lead) {
-                builder->AddCharacter(from_lead);
-                builder->AddAtom(RangeAtom(alloc, from_trail, unicode::TrailSurrogateMax));
-
-                builder->NewAlternative();
-
-                builder->AddCharacter(to_lead);
-                builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin, to_trail));
-            } else if (from_lead + 2 == to_lead) {
-                builder->AddCharacter(from_lead);
-                builder->AddAtom(RangeAtom(alloc, from_trail, unicode::TrailSurrogateMax));
-
-                builder->NewAlternative();
-
-                builder->AddCharacter(from_lead + 1);
-                builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin,
-                                           unicode::TrailSurrogateMax));
-
-                builder->NewAlternative();
-
-                builder->AddCharacter(to_lead);
-                builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin, to_trail));
-            } else {
-                builder->AddCharacter(from_lead);
-                builder->AddAtom(RangeAtom(alloc, from_trail, unicode::TrailSurrogateMax));
-
-                builder->NewAlternative();
-
-                builder->AddAtom(RangeAtom(alloc, from_lead + 1, to_lead - 1));
-                builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin,
-                                           unicode::TrailSurrogateMax));
-
-                builder->NewAlternative();
-
-                builder->AddCharacter(to_lead);
-                builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin, to_trail));
-            }
-        }
-        added = true;
-    }
-
-    return builder->ToRegExp();
-}
-
-static inline RegExpTree*
-CaseFoldingSurrogatePairAtom(LifoAlloc* alloc, char16_t lead, char16_t trail, int32_t diff)
-{
-    bool ignore_case = true;
-    bool unicode = true;
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
-
-    builder->AddCharacter(lead);
-    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    ranges->append(CharacterRange::Range(trail, trail));
-    ranges->append(CharacterRange::Range(trail + diff, trail + diff));
-    builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges));
-
-    return builder->ToRegExp();
-}
-
-static inline RegExpTree*
-SurrogatePairAtom(LifoAlloc* alloc, char16_t lead, char16_t trail, bool ignore_case)
-{
-    if (ignore_case) {
-#define CALL_ATOM(FROM, TO, LEAD, TRAIL_FROM, TRAIL_TO, DIFF) \
-        if (lead == LEAD &&trail >= TRAIL_FROM && trail <= TRAIL_TO) \
-            return CaseFoldingSurrogatePairAtom(alloc, lead, trail, DIFF);
-        FOR_EACH_NON_BMP_CASE_FOLDING(CALL_ATOM)
-        FOR_EACH_NON_BMP_REV_CASE_FOLDING(CALL_ATOM)
-#undef CALL_ATOM
-    }
-
-    bool unicode = true;
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
-    builder->AddCharacter(lead);
-    builder->AddCharacter(trail);
-    return builder->ToRegExp();
-}
-
-static inline RegExpTree*
-LeadSurrogateAtom(LifoAlloc* alloc, char16_t value, bool ignore_case)
-{
-    bool unicode = true;
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
-    builder->AddCharacter(value);
-    builder->AddAtom(NegativeLookahead(alloc, unicode::TrailSurrogateMin,
-                                       unicode::TrailSurrogateMax));
-    return builder->ToRegExp();
-}
-
-static inline RegExpTree*
-TrailSurrogateAtom(LifoAlloc* alloc, char16_t value, bool ignore_case)
-{
-    bool unicode = true;
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
-    builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(
-        RegExpAssertion::NOT_AFTER_LEAD_SURROGATE));
-    builder->AddCharacter(value);
-    return builder->ToRegExp();
-}
-
-static inline RegExpTree*
-UnicodeEverythingAtom(LifoAlloc* alloc, bool ignore_case)
-{
-    bool unicode = true;
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
-
-    // everything except \x0a, \x0d, \u2028 and \u2029
-
-    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    AddClassNegated(kLineTerminatorAndSurrogateRanges,
-                    kLineTerminatorAndSurrogateRangeCount,
-                    ranges);
-    builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges));
-
-    builder->NewAlternative();
-
-    builder->AddAtom(RangeAtom(alloc, unicode::LeadSurrogateMin, unicode::LeadSurrogateMax));
-    builder->AddAtom(NegativeLookahead(alloc, unicode::TrailSurrogateMin,
-                                       unicode::TrailSurrogateMax));
-
-    builder->NewAlternative();
-
-    builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(
-        RegExpAssertion::NOT_AFTER_LEAD_SURROGATE));
-    builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin, unicode::TrailSurrogateMax));
-
-    builder->NewAlternative();
-
-    builder->AddAtom(RangeAtom(alloc, unicode::LeadSurrogateMin, unicode::LeadSurrogateMax));
-    builder->AddAtom(RangeAtom(alloc, unicode::TrailSurrogateMin, unicode::TrailSurrogateMax));
-
-    return builder->ToRegExp();
-}
-
-RegExpTree*
-UnicodeCharacterClassEscapeAtom(LifoAlloc* alloc, char16_t char_class, bool ignore_case)
-{
-    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    CharacterRangeVector* lead_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    CharacterRangeVector* trail_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    WideCharRangeVector* wide_ranges = alloc->newInfallible<WideCharRangeVector>(*alloc);
-    AddCharOrEscapeUnicode(alloc, ranges, lead_ranges, trail_ranges, wide_ranges, char_class, 0,
-                           ignore_case);
-
-    return UnicodeRangesAtom(alloc, ranges, lead_ranges, trail_ranges, wide_ranges, false, false);
-}
-
-static inline RegExpTree*
-UnicodeBackReferenceAtom(LifoAlloc* alloc, RegExpTree* atom, bool ignore_case)
-{
-    // If a back reference has a standalone lead surrogate as its last
-    // character, then that lead surrogate shouldn't match lead surrogates that
-    // are paired with a corresponding trail surrogate.
-    bool unicode = true;
-    RegExpBuilder* builder = alloc->newInfallible<RegExpBuilder>(alloc, ignore_case, unicode);
-
-    builder->AddAtom(atom);
-    builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(
-        RegExpAssertion::NOT_IN_SURROGATE_PAIR));
-
-    return builder->ToRegExp();
-}
 
 // ----------------------------------------------------------------------------
 // RegExpParser
@@ -609,7 +85,7 @@ RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, Zone* zone,
                                   bool unicode, bool ignore_case)
   : ts(ts),
     zone_(zone),
-    captures_(nullptr),
+    captures_(NULL),
     start_(chars),
     next_pos_(start_),
     end_(end),
@@ -628,17 +104,57 @@ RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, Zone* zone,
 }
 
 template <typename CharT>
-void
-RegExpParser<CharT>::Advance()
-{
-    if (next_pos_ < end_) {
-        current_ = *next_pos_;
-        next_pos_++;
+template <bool update_position>
+inline uc32 RegExpParser<CharT>::ReadNext() {
+    const CharT* position = next_pos_;
+    uc32 c0 = *position;
+    position++;
+    // Read the whole surrogate pair in case of unicode flag, if possible.
+    if (unicode() && position < end_ &&
+        unicode::IsLeadSurrogate(static_cast<uc16>(c0))) {
+        uc16 c1 = *position;
+        if (unicode::IsTrailSurrogate(c1)) {
+            c0 = unicode::UTF16Decode(static_cast<uc16>(c0), c1);
+            position++;
+        }
+    }
+    if (update_position) next_pos_ = position;
+    return c0;
+}
+
+template <typename CharT>
+uc32 RegExpParser<CharT>::Next() {
+    if (has_next()) {
+        return ReadNext<false>();
+    } else {
+        return kEndMarker;
+    }
+}
+
+template <typename CharT>
+void RegExpParser<CharT>::Advance() {
+    if (has_next()) {
+        current_ = ReadNext<true>();
     } else {
         current_ = kEndMarker;
+        // Advance so that position() points to 1-after-the-last-character. This is
+        // important so that Reset() to this position works correctly.
         next_pos_ = end_ + 1;
         has_more_ = false;
     }
+}
+
+template <typename CharT>
+void RegExpParser<CharT>::Reset(const CharT* pos) {
+    next_pos_ = pos;
+    has_more_ = (pos < end_);
+    Advance();
+}
+
+template <typename CharT>
+void RegExpParser<CharT>::Advance(int dist) {
+    next_pos_ += dist - 1;
+    Advance();
 }
 
 template <typename CharT>
@@ -840,16 +356,11 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
           }
           case '.': {
             Advance();
-            if (unicode_) {
-                builder->AddAtom(UnicodeEverythingAtom(zone(), ignore_case()));
-                break;
-            }
-
             CharacterRangeVector* ranges =
                 zone_->newInfallible<CharacterRangeVector>(*zone());
 
             // Everything except \x0a, \x0d, \u2028 and \u2029
-            CharacterRange::AddClassEscape('.', ranges, zone());
+            CharacterRange::AddClassEscape('.', ranges, false, zone());
 
             RegExpCharacterClass* cc = zone_->newInfallible<RegExpCharacterClass>(ranges);
             builder->AddCharacterClass(cc);
@@ -898,7 +409,7 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             RegExpTree* cc = ParseCharacterClass();
             if (!cc)
                 return nullptr;
-            builder->AddAtom(cc);
+            builder->AddCharacterClass(cc->AsCharacterClass());
             break;
           }
             // Atom ::
@@ -922,26 +433,21 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                 //
                 // CharacterClassEscape :: one of
                 //   d D s S w W
-              case 'D': case 'S': case 'W':
-                if (unicode_) {
-                    Advance();
-                    builder->AddAtom(UnicodeCharacterClassEscapeAtom(zone(), current(),
-                                                                     ignore_case_));
-                    Advance();
-                    break;
-                }
-                MOZ_FALLTHROUGH;
-              case 'd': case 's': case 'w': {
-                widechar c = Next();
+              case 'd':
+              case 'D':
+              case 's':
+              case 'S':
+              case 'w':
+              case 'W': {
+                uc32 c = Next();
                 Advance(2);
                 CharacterRangeVector* ranges =
                     zone_->newInfallible<CharacterRangeVector>(*zone());
-                if (unicode_)
-                    CharacterRange::AddClassEscapeUnicode(c, ranges, ignore_case_, zone());
-                else
-                    CharacterRange::AddClassEscape(c, ranges, zone());
-                RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges);
-                builder->AddAtom(atom);
+                CharacterRange::AddClassEscape(c, ranges,
+                                               unicode() && ignore_case(), zone());
+                RegExpCharacterClass* cc =
+                    zone_->newInfallible<RegExpCharacterClass>(ranges);
+                builder->AddCharacterClass(cc);
                 break;
               }
               case '1':
@@ -966,10 +472,7 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                     } else {
                         RegExpCapture* capture = GetCapture(index);
                         RegExpTree* atom = zone_->newInfallible<RegExpBackReference>(capture);
-                        if (unicode_)
-                            builder->AddAtom(UnicodeBackReferenceAtom(zone(), atom, ignore_case()));
-                        else
-                            builder->AddAtom(atom);
+                        builder->AddAtom(atom);
                     }
                     break;
                 }
@@ -1097,14 +600,6 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             }
             MOZ_FALLTHROUGH;
           default:
-            if (unicode()) {
-                char16_t lead, trail;
-                if (ParseRawSurrogatePair(&lead, &trail)) {
-                    uc32 value = unicode::UTF16Decode(lead, trail);
-                    builder->AddUnicodeCharacter(value);
-                    break;
-                }
-            }
             builder->AddUnicodeCharacter(current());
             Advance();
             break;
@@ -1353,7 +848,7 @@ bool RegExpParser<CharT>::ParseIntervalQuantifier(int* min_out, int* max_out) {
 
 template <typename CharT>
 uc32 RegExpParser<CharT>::ParseOctalLiteral() {
-    DCHECK('0' <= current() && current() <= '7');
+    DCHECK(('0' <= current() && current() <= '7') || current() == kEndMarker);
     // For compatibility with some other browsers (not all), we parse
     // up to three octal digits with a value below 256.
     // ES#prod-annexB-LegacyOctalEscapeSequence
@@ -1408,6 +903,7 @@ bool RegExpParser<CharT>::ParseUnicodeEscape(uc32* value, bool* parsed) {
         // Error already reported in ParseUnlimitedLengthHexNumber.
         return false;
     }
+    // \u but no {, or \u{...} escapes not allowed.
     bool result = ParseHexEscape(4, value);
     if (result && unicode() && unicode::IsLeadSurrogate(*value) &&
         current() == '\\') {
@@ -1595,8 +1091,10 @@ bool RegExpParser<CharT>::ParseClassCharacterEscape(uc32* code) {
 }
 
 template <typename CharT>
-bool RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, uc32* value) {
-    MOZ_ASSERT(*char_class == kNoCharClass);
+bool RegExpParser<CharT>::ParseClassEscape(CharacterRangeVector* ranges,
+                                           Zone* zone,
+                                           bool add_unicode_case_equivalents,
+                                           uc32* char_out, bool* is_class_escape) {
     uc32 current_char = current();
     if (current_char == '\\') {
         switch (Next()) {
@@ -1606,8 +1104,10 @@ bool RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, uc32* value) {
           case 'D':
           case 's':
           case 'S': {
-            *char_class = Next();
+            CharacterRange::AddClassEscape(static_cast<char>(Next()), ranges,
+                                           add_unicode_case_equivalents, zone);
             Advance(2);
+            *is_class_escape = true;
             return true;
           }
           case kEndMarker:
@@ -1615,19 +1115,14 @@ bool RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, uc32* value) {
           default:
             break;
         }
-        if (!ParseClassCharacterEscape(value))
+        if (!ParseClassCharacterEscape(char_out))
             return false;
+        *is_class_escape = false;
         return true;
     } else {
-        if (unicode_) {
-            char16_t lead, trail;
-            if (ParseRawSurrogatePair(&lead, &trail)) {
-                *value = unicode::UTF16Decode(lead, trail);
-                return true;
-            }
-        }
         Advance();
-        *value = current_char;
+        *char_out = current_char;
+        *is_class_escape = false;
         return true;
     }
 }
@@ -1642,21 +1137,14 @@ RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
         Advance();
     }
     CharacterRangeVector* ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
-    CharacterRangeVector* lead_ranges = nullptr;
-    CharacterRangeVector* trail_ranges = nullptr;
-    WideCharRangeVector* wide_ranges = nullptr;
-
-    if (unicode_) {
-        lead_ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
-        trail_ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
-        wide_ranges = zone_->newInfallible<WideCharRangeVector>(*zone());
-    }
-
+    bool add_unicode_case_equivalents = unicode() && ignore_case();
     while (has_more() && current() != ']') {
         uc32 char_1 = 0, char_2 = 0;
-        char16_t char_class = kNoCharClass, char_class_2 = kNoCharClass;
-        if (!ParseClassAtom(&char_class, &char_1))
-            return nullptr;
+        bool is_class_1, is_class_2;
+        if (!ParseClassEscape(ranges, zone(), add_unicode_case_equivalents, &char_1,
+                              &is_class_1))
+            return nullptr; {
+        }
         if (current() == '-') {
             Advance();
             if (current() == kEndMarker) {
@@ -1664,90 +1152,45 @@ RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
                 // following code report an error.
                 break;
             } else if (current() == ']') {
-                if (unicode_) {
-                    AddCharOrEscapeUnicode(zone(), ranges, lead_ranges, trail_ranges, wide_ranges,
-                                           char_class, char_1, ignore_case_);
-                } else {
-                    AddCharOrEscape(zone(), ranges, char_class, char_1);
-                }
+                if (!is_class_1) ranges->append(CharacterRange::Singleton(char_1));
                 ranges->append(CharacterRange::Singleton('-'));
                 break;
             }
-            if (!ParseClassAtom(&char_class_2, &char_2))
-                return nullptr;
-            if (char_class != kNoCharClass || char_class_2 != kNoCharClass) {
+            if (!ParseClassEscape(ranges, zone(), add_unicode_case_equivalents, &char_2,
+                                  &is_class_2))
+                return nullptr; {
+            }
+            if (is_class_1 || is_class_2) {
+                // Either end is an escaped character class. Treat the '-' verbatim.
                 if (unicode()) {
                     // ES2015 21.2.2.15.1 step 1.
                     return ReportError(JSMSG_RANGE_WITH_CLASS_ESCAPE);
                 }
-
-                // Either end is an escaped character class. Treat the '-' verbatim.
-                AddCharOrEscape(zone(), ranges, char_class, char_1);
+                if (!is_class_1) ranges->append(CharacterRange::Singleton(char_1));
                 ranges->append(CharacterRange::Singleton('-'));
-                AddCharOrEscape(zone(), ranges, char_class_2, char_2);
+                if (!is_class_2) ranges->append(CharacterRange::Singleton(char_2));
                 continue;
             }
             // ES2015 21.2.2.15.1 step 6.
             if (char_1 > char_2) {
                 return ReportError(JSMSG_BAD_CLASS_RANGE);
             }
-            if (unicode_)
-                AddUnicodeRange(zone(), ranges, lead_ranges, trail_ranges,wide_ranges, char_1, char_2);
-            else
-                ranges->append(CharacterRange::Range(char_1, char_2));
+            ranges->append(CharacterRange::Range(char_1, char_2));
         } else {
-            if (unicode_) {
-                AddCharOrEscapeUnicode(zone(), ranges, lead_ranges, trail_ranges, wide_ranges,
-                                       char_class, char_1, ignore_case_);
-            } else {
-                AddCharOrEscape(zone(), ranges, char_class, char_1);
-            }
+            if (!is_class_1) ranges->append(CharacterRange::Singleton(char_1));
         }
     }
     if (!has_more()) {
         return ReportError(JSMSG_UNTERM_CLASS);
     }
     Advance();
-    if (!unicode_) {
-        if (ranges->length() == 0) {
-            ranges->append(CharacterRange::Everything());
-            is_negated = !is_negated;
-        }
-        RegExpCharacterClass::Flags flags;
-        if (is_negated) flags = RegExpCharacterClass::NEGATED;
-        return zone_->newInfallible<RegExpCharacterClass>(ranges, flags);
-    }
-
-    if (!is_negated && ranges->length() == 0 && lead_ranges->length() == 0 &&
-        trail_ranges->length() == 0 && wide_ranges->length() == 0)
-    {
+    if (ranges->length() == 0) {
         ranges->append(CharacterRange::Everything());
-        return zone_->newInfallible<RegExpCharacterClass>(ranges, RegExpCharacterClass::NEGATED);
+        is_negated = !is_negated;
     }
-
-    return UnicodeRangesAtom(zone(), ranges, lead_ranges, trail_ranges, wide_ranges, is_negated,
-                             ignore_case_);
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseRawSurrogatePair(char16_t* lead, char16_t* trail)
-{
-    widechar c1 = current();
-    if (!unicode::IsLeadSurrogate(c1))
-        return false;
-
-    const CharT* start = position();
-    Advance();
-    widechar c2 = current();
-    if (!unicode::IsTrailSurrogate(c2)) {
-        Reset(start);
-        return false;
-    }
-    Advance();
-    *lead = c1;
-    *trail = c2;
-    return true;
+    RegExpCharacterClass::Flags flags;
+    if (is_negated) flags = RegExpCharacterClass::NEGATED;
+    return zone_->newInfallible<RegExpCharacterClass>(ranges, flags);
 }
 
 // ----------------------------------------------------------------------------
@@ -1764,27 +1207,59 @@ RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
     pending_empty_(false),
     ignore_case_(ignore_case),
     unicode_(unicode),
-    characters_(NULL)
+    characters_(NULL),
+    pending_surrogate_(kNoPendingSurrogate),
+    terms_(),
+    alternatives_()
 #ifdef DEBUG
-  , last_added_(ADD_NONE)
+    ,
+    last_added_(ADD_NONE)
 #endif
-{}
+{
+}
 
 void RegExpBuilder::AddLeadSurrogate(uc16 lead_surrogate) {
     DCHECK(unicode::IsLeadSurrogate(lead_surrogate));
-    AddAtom(LeadSurrogateAtom(zone(), lead_surrogate, ignore_case()));
+    FlushPendingSurrogate();
+    // Hold onto the lead surrogate, waiting for a trail surrogate to follow.
+    pending_surrogate_ = lead_surrogate;
 }
 
 void RegExpBuilder::AddTrailSurrogate(uc16 trail_surrogate) {
     DCHECK(unicode::IsTrailSurrogate(trail_surrogate));
-    AddAtom(TrailSurrogateAtom(zone(), trail_surrogate, ignore_case()));
+    if (pending_surrogate_ != kNoPendingSurrogate) {
+        uc16 lead_surrogate = pending_surrogate_;
+        pending_surrogate_ = kNoPendingSurrogate;
+        DCHECK(unicode::IsLeadSurrogate(lead_surrogate));
+        uc32 combined =
+            unicode::UTF16Decode(lead_surrogate, trail_surrogate);
+        if (NeedsDesugaringForIgnoreCase(combined)) {
+            AddCharacterClassForDesugaring(combined);
+        } else {
+            CharacterVector* surrogate_pair = zone()->newInfallible<CharacterVector>(*zone());
+            surrogate_pair->append(lead_surrogate);
+            surrogate_pair->append(trail_surrogate);
+            RegExpAtom* atom =
+                zone()->newInfallible<RegExpAtom>(surrogate_pair);
+            AddAtom(atom);
+        }
+    } else {
+        pending_surrogate_ = trail_surrogate;
+        FlushPendingSurrogate();
+    }
 }
 
 void RegExpBuilder::FlushPendingSurrogate() {
-    // TODO(anba): Port pending surrogate logic.
+    if (pending_surrogate_ != kNoPendingSurrogate) {
+        DCHECK(unicode());
+        uc32 c = pending_surrogate_;
+        pending_surrogate_ = kNoPendingSurrogate;
+        AddCharacterClassForDesugaring(c);
+    }
 }
 
 void RegExpBuilder::FlushCharacters() {
+    FlushPendingSurrogate();
     pending_empty_ = false;
     if (characters_ != NULL) {
         RegExpTree* atom = zone()->newInfallible<RegExpAtom>(characters_);
@@ -1810,20 +1285,24 @@ void RegExpBuilder::FlushText() {
 }
 
 void RegExpBuilder::AddCharacter(uc16 c) {
+    FlushPendingSurrogate();
     pending_empty_ = false;
-    if (characters_ == NULL) {
-        characters_ = zone()->newInfallible<CharacterVector>(*zone());
+    if (NeedsDesugaringForIgnoreCase(c)) {
+        AddCharacterClassForDesugaring(c);
+    } else {
+        if (characters_ == NULL) {
+            characters_ = zone()->newInfallible<CharacterVector>(*zone());
+        }
+        characters_->append(c);
+        LAST(ADD_CHAR);
     }
-    characters_->append(c);
-    LAST(ADD_CHAR);
 }
 
 void RegExpBuilder::AddUnicodeCharacter(uc32 c) {
     if (c > static_cast<uc32>(unicode::UTF16Max)) {
         DCHECK(unicode());
-        char16_t lead, trail;
-        unicode::UTF16Encode(c, &lead, &trail);
-        AddAtom(SurrogatePairAtom(zone(), lead, trail, ignore_case()));
+        AddLeadSurrogate(unicode::LeadSurrogate(c));
+        AddTrailSurrogate(unicode::TrailSurrogate(c));
     } else if (unicode() && unicode::IsLeadSurrogate(c)) {
         AddLeadSurrogate(c);
     } else if (unicode() && unicode::IsTrailSurrogate(c)) {
@@ -1834,13 +1313,28 @@ void RegExpBuilder::AddUnicodeCharacter(uc32 c) {
 }
 
 void RegExpBuilder::AddEscapedUnicodeCharacter(uc32 character) {
+    // A lead or trail surrogate parsed via escape sequence will not
+    // pair up with any preceding lead or following trail surrogate.
+    FlushPendingSurrogate();
     AddUnicodeCharacter(character);
+    FlushPendingSurrogate();
 }
 
 void RegExpBuilder::AddEmpty() { pending_empty_ = true; }
 
 void RegExpBuilder::AddCharacterClass(RegExpCharacterClass* cc) {
-    AddAtom(cc);
+    if (NeedsDesugaringForUnicode(cc)) {
+        // With /u, character class needs to be desugared, so it
+        // must be a standalone term instead of being part of a RegExpText.
+        AddTerm(cc);
+    } else {
+        AddAtom(cc);
+    }
+}
+
+void RegExpBuilder::AddCharacterClassForDesugaring(uc32 c) {
+    AddTerm(zone_->newInfallible<RegExpCharacterClass>(
+        CharacterRange::List(zone(), CharacterRange::Singleton(c))));
 }
 
 void RegExpBuilder::AddAtom(RegExpTree* term) {
@@ -1855,6 +1349,12 @@ void RegExpBuilder::AddAtom(RegExpTree* term) {
         FlushText();
         terms_.Add(term, zone());
     }
+    LAST(ADD_ATOM);
+}
+
+void RegExpBuilder::AddTerm(RegExpTree* term) {
+    FlushText();
+    terms_.Add(term, zone());
     LAST(ADD_ATOM);
 }
 
@@ -1888,6 +1388,33 @@ void RegExpBuilder::FlushTerms() {
     LAST(ADD_NONE);
 }
 
+bool RegExpBuilder::NeedsDesugaringForUnicode(RegExpCharacterClass* cc) {
+    if (!unicode()) return false;
+    // TODO(yangguo): we could be smarter than this. Case-insensitivity does not
+    // necessarily mean that we need to desugar. It's probably nicer to have a
+    // separate pass to figure out unicode desugarings.
+    if (ignore_case()) return true;
+    CharacterRangeVector* ranges = cc->ranges(zone());
+    CharacterRange::Canonicalize(ranges);
+    for (int i = ranges->length() - 1; i >= 0; i--) {
+        uc32 from = ranges->at(i).from();
+        uc32 to = ranges->at(i).to();
+        // Check for non-BMP characters.
+        if (to >= unicode::NonBMPMin) return true;
+        // Check for lone surrogates.
+        if (from <= unicode::TrailSurrogateMax && to >= unicode::LeadSurrogateMin) return true;
+    }
+    return false;
+}
+
+
+bool RegExpBuilder::NeedsDesugaringForIgnoreCase(uc32 c) {
+    if (unicode() && ignore_case()) {
+        return unicode::HasCaseFold(c);
+    }
+    return false;
+}
+
 RegExpTree* RegExpBuilder::ToRegExp() {
     FlushTerms();
     int num_alternatives = alternatives_.length();
@@ -1898,6 +1425,7 @@ RegExpTree* RegExpBuilder::ToRegExp() {
 
 bool RegExpBuilder::AddQuantifierToAtom(
         int min, int max, RegExpQuantifier::QuantifierType quantifier_type) {
+    FlushPendingSurrogate();
     if (pending_empty_) {
         pending_empty_ = false;
         return true;

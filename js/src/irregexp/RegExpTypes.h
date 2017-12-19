@@ -36,6 +36,8 @@
 #include "ds/LifoAlloc.h"
 #include "js/Vector.h"
 
+#include "vm/Unicode.h"
+
 namespace js {
 
 namespace jit {
@@ -69,7 +71,8 @@ constexpr int32_t kMaxInt = INT32_MAX;
 
 namespace String {
     constexpr int32_t kMaxOneByteCharCode = 0xff;
-    constexpr int32_t kMaxUtf16CodeUnit = 0xffff;
+    constexpr uint32_t kMaxOneByteCharCodeU = 0xff;
+    constexpr uc32 /* TODO(anba): Change back to int32_t*/ kMaxUtf16CodeUnit = 0xffff;
     constexpr int32_t kMaxCodePoint = 0x10ffff;
 }
 
@@ -78,6 +81,11 @@ namespace unibrow {
 
     namespace Ecma262UnCanonicalize {
         constexpr size_t kMaxWidth = 4;
+    }
+
+    namespace Utf16 {
+        static constexpr auto& LeadSurrogate = unicode::LeadSurrogate;
+        static constexpr auto& TrailSurrogate = unicode::TrailSurrogate;
     }
 }
 

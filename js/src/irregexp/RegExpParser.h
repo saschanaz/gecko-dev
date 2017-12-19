@@ -128,8 +128,9 @@ class BufferedVector {
     }
 
     VectorType* GetList(Zone* zone) {
-        if (list_ == NULL)
+        if (list_ == NULL) {
             list_ = zone->newInfallible<VectorType>(*zone);
+        }
         if (last_ != NULL) {
             list_->append(last_);
             last_ = NULL;
@@ -192,10 +193,6 @@ class RegExpBuilder {
 #endif
 };
 
-// TODO(anba): remove this typedef
-// Characters parsed by RegExpParser can be either char16_t or kEndMarker.
-typedef uint32_t widechar;
-
 template <typename CharT>
 class RegExpParser {
   public:
@@ -224,8 +221,6 @@ class RegExpParser {
     bool ParseUnicodeEscape(uc32* value, bool* parsed);
     bool ParseUnlimitedLengthHexNumber(int max_value, uc32* value);
 
-    bool ParseRawSurrogatePair(char16_t* lead, char16_t* trail);
-
     uc32 ParseOctalLiteral();
 
     // Tries to parse the input as a back reference.  If successful it
@@ -236,13 +231,11 @@ class RegExpParser {
 
     // Parse inside a class. Either add escaped class to the range, or return
     // false and pass parsed single character through |char_out|.
-    void ParseClassEscape(CharacterRangeVector* ranges, Zone* zone,
+    bool ParseClassEscape(CharacterRangeVector* ranges, Zone* zone,
                           bool add_unicode_case_equivalents, uc32* char_out,
                           bool* is_class_escape);
 
     char ParseClassEscape();
-
-    bool ParseClassAtom(char16_t* char_class, widechar *value);
 
   private:
     void SyntaxError(unsigned errorNumber, ...);
@@ -251,16 +244,8 @@ class RegExpParser {
     RegExpTree* ReportError(unsigned errorNumber, const char* param = nullptr);
 
     void Advance();
-    void Advance(int dist) {
-        next_pos_ += dist - 1;
-        Advance();
-    }
-
-    void Reset(const CharT* pos) {
-        next_pos_ = pos;
-        has_more_ = (pos < end_);
-        Advance();
-    }
+    void Advance(int dist);
+    void Reset(const CharT* pos);
 
     // Reports whether the pattern might be used as a literal search string.
     // Only use if the result of the parse is a single atom node.
@@ -339,11 +324,7 @@ class RegExpParser {
     uc32 current() { return current_; }
     bool has_more() { return has_more_; }
     bool has_next() { return next_pos_ < end_; }
-    uc32 Next() {
-        if (has_next())
-            return *next_pos_;
-        return kEndMarker;
-    }
+    uc32 Next();
     template <bool update_position>
     uc32 ReadNext();
     void ScanForCaptures();

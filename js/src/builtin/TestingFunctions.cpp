@@ -4451,10 +4451,6 @@ AssertionTypeToString(irregexp::RegExpAssertion::AssertionType type)
         return "BOUNDARY";
       case irregexp::RegExpAssertion::NON_BOUNDARY:
         return "NON_BOUNDARY";
-      case irregexp::RegExpAssertion::NOT_AFTER_LEAD_SURROGATE:
-        return "NOT_AFTER_LEAD_SURROGATE";
-      case irregexp::RegExpAssertion::NOT_IN_SURROGATE_PAIR:
-        return "NOT_IN_SURROGATE_PAIR";
     }
     MOZ_CRASH("unexpected AssertionType");
 }

@@ -37,6 +37,13 @@
 namespace js {
 namespace irregexp {
 
+static const uc32 kLeadSurrogateStart = 0xd800;
+static const uc32 kLeadSurrogateEnd = 0xdbff;
+static const uc32 kTrailSurrogateStart = 0xdc00;
+static const uc32 kTrailSurrogateEnd = 0xdfff;
+static const uc32 kNonBmpStart = 0x10000;
+static const uc32 kNonBmpEnd = 0x10ffff;
+
 class MOZ_STACK_CLASS RegExpMacroAssembler {
   public:
     using Label = jit::Label;
@@ -90,8 +97,8 @@ class MOZ_STACK_CLASS RegExpMacroAssembler {
     virtual void CheckNotBackReference(int start_reg,
                                        Label* on_no_match) = 0;
     virtual void CheckNotBackReferenceIgnoreCase(int start_reg,
-                                                 Label* on_no_match,
-                                                 bool unicode) = 0;
+                                                 bool unicode,
+                                                 Label* on_no_match) = 0;
     // Check the current character for a match with a literal character.  If we
     // fail to match then goto the on_failure label.  End of input always
     // matches.  If the label is NULL then we should pop a backtrack address off
@@ -119,16 +126,12 @@ class MOZ_STACK_CLASS RegExpMacroAssembler {
 
     // Checks whether the given offset from the current position is before
     // the end of the string. May overwrite the current character.
-    virtual void CheckPosition(int cp_offset, Label* on_outside_input) {
-        LoadCurrentCharacter(cp_offset, on_outside_input, true);
-    }
+    virtual void CheckPosition(int cp_offset, Label* on_outside_input);
     // Check whether a standard/default character class matches the current
     // character. Returns false if the type of special character class does
     // not have custom support.
     // May clobber the current loaded character.
-    virtual bool CheckSpecialCharacterClass(uc16 type, Label* on_no_match) {
-        return false;
-    }
+    virtual bool CheckSpecialCharacterClass(uc16 type, Label* on_no_match);
     virtual void Fail() = 0;
     // Check whether a register is >= a given constant and go to a label if it
     // is.  Backtracks instead if the label is NULL.
@@ -171,6 +174,9 @@ class MOZ_STACK_CLASS RegExpMacroAssembler {
 
     virtual RegExpCode GenerateCode(JSContext* cx, bool match_only) = 0;
 
+    // Check that we are not in the middle of a surrogate pair.
+    void CheckNotInSurrogatePair(int cp_offset, Label* on_failure);
+
     // Controls the generation of large inlined constants in the code.
     void set_slow_safe(bool ssc) { slow_safe_compiler_ = ssc; }
     bool slow_safe() { return slow_safe_compiler_; }
@@ -179,6 +185,7 @@ class MOZ_STACK_CLASS RegExpMacroAssembler {
         NOT_GLOBAL,
         GLOBAL_NO_ZERO_LENGTH_CHECK,
         GLOBAL,
+        GLOBAL_UNICODE
     };
 
     // Set whether the regular expression has the global flag.  Exiting due to
@@ -186,8 +193,9 @@ class MOZ_STACK_CLASS RegExpMacroAssembler {
     inline void set_global_mode(GlobalMode mode) { global_mode_ = mode; }
     inline bool global() { return global_mode_ != NOT_GLOBAL; }
     inline bool global_with_zero_length_check() {
-        return global_mode_ == GLOBAL;
+        return global_mode_ == GLOBAL || global_mode_ == GLOBAL_UNICODE;
     }
+    inline bool global_unicode() { return global_mode_ == GLOBAL_UNICODE; }
 
     LifoAlloc& alloc() { return alloc_; }
 

@@ -377,7 +377,7 @@ void InterpretedRegExpMacroAssembler::CheckNotBackReference(int start_reg,
 }
 
 void InterpretedRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(
-        int start_reg, Label* on_not_equal, bool unicode) {
+        int start_reg, bool unicode, Label* on_not_equal) {
     DCHECK(start_reg >= 0);
     DCHECK(start_reg <= kMaxRegister);
     Emit((unicode ? BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE

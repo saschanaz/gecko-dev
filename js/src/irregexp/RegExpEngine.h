@@ -90,6 +90,31 @@ class OutSet {
     friend class Trace;
 };
 
+// Categorizes character ranges into BMP, non-BMP, lead, and trail surrogates.
+class UnicodeRangeSplitter {
+  public:
+    UnicodeRangeSplitter(Zone* zone, CharacterRangeVector* base);
+
+    CharacterRangeVector* bmp() { return bmp_; }
+    CharacterRangeVector* lead_surrogates() { return lead_surrogates_; }
+    CharacterRangeVector* trail_surrogates() { return trail_surrogates_; }
+    CharacterRangeVector* non_bmp() const { return non_bmp_; }
+
+  private:
+    static const int kBase = 0;
+    // Separate ranges into
+    static const int kBmpCodePoints = 1;
+    static const int kLeadSurrogates = 2;
+    static const int kTrailSurrogates = 3;
+    static const int kNonBmpCodePoints = 4;
+
+    Zone* zone_;
+    CharacterRangeVector* bmp_;
+    CharacterRangeVector* lead_surrogates_;
+    CharacterRangeVector* trail_surrogates_;
+    CharacterRangeVector* non_bmp_;
+};
+
 #define FOR_EACH_NODE_TYPE(VISIT)                                    \
   VISIT(End)                                                         \
   VISIT(Action)                                                      \
@@ -187,7 +212,7 @@ class QuickCheckDetails {
     void Merge(QuickCheckDetails* other, int from_index);
 
     // Advance the current position by some amount.
-    void Advance(int by);
+    void Advance(int by, bool one_byte);
 
     void Clear();
 
@@ -293,7 +318,7 @@ class RegExpNode {
     // If we know that the input is one-byte then there are some nodes that can
     // never match.  This method returns a node that can be substituted for
     // itself, or NULL if the node can never match.
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode) {
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case) {
         return this;
     }
 
@@ -366,12 +391,12 @@ class SeqRegExpNode : public RegExpNode {
 
     RegExpNode* on_success() { return on_success_; }
     void set_on_success(RegExpNode* node) { on_success_ = node; }
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
     virtual bool FillInBMInfo(int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start);
 
   protected:
-    RegExpNode* FilterSuccessor(int depth, bool ignore_case, bool unicode);
+    RegExpNode* FilterSuccessor(int depth, bool ignore_case);
 
   private:
     RegExpNode* on_success_;
@@ -473,6 +498,15 @@ class TextNode : public SeqRegExpNode {
         elms_(zone()->newInfallible<TextElementVector>(*zone())) {
         elms_->append(TextElement::CharClass(that));
     }
+    // Create TextNode for a single character class for the given ranges.
+    static TextNode* CreateForCharacterRanges(Zone* zone,
+                                              CharacterRangeVector* ranges,
+                                              RegExpNode* on_success);
+    // Create TextNode for a surrogate pair with a range given for the
+    // lead and the trail surrogate each.
+    static TextNode* CreateForSurrogatePair(Zone* zone, CharacterRange lead,
+                                            CharacterRange trail,
+                                            RegExpNode* on_success);
 
     virtual void Accept(NodeVisitor* visitor);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
@@ -482,22 +516,21 @@ class TextNode : public SeqRegExpNode {
                                       int characters_filled_in,
                                       bool not_at_start);
     TextElementVector* elements() { return elms_; }
-    void MakeCaseIndependent(bool is_one_byte, bool unicode);
+    void MakeCaseIndependent(bool is_one_byte);
     virtual int GreedyLoopTextLength();
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
                                                          RegExpCompiler* compiler);
     virtual bool FillInBMInfo(int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start);
     void CalculateOffsets();
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
 
   private:
     enum TextEmitPassType {
         NON_LATIN1_MATCH,             // Check for characters that can't match.
         SIMPLE_CHARACTER_MATCH,      // Case-dependent single character check.
-        CASE_SINGLE_CHARACTER_MATCH, // Case-independent single character check.
-        CASE_MUTLI_CHARACTER_MATCH,  // Case-independent single character with
-                                     // multiple variation.
+        NON_LETTER_CHARACTER_MATCH,  // Check characters that have no case equivs.
+        CASE_CHARACTER_MATCH,        // Case-independent single character check.
         CHARACTER_CLASS_MATCH        // Character class.
     };
     static bool SkipPass(int pass, bool ignore_case);
@@ -520,9 +553,7 @@ class AssertionNode : public SeqRegExpNode {
         AT_START,
         AT_BOUNDARY,
         AT_NON_BOUNDARY,
-        AFTER_NEWLINE,
-        NOT_AFTER_LEAD_SURROGATE,
-        NOT_IN_SURROGATE_PAIR
+        AFTER_NEWLINE
     };
     AssertionNode(AssertionType t, RegExpNode* on_success)
       : SeqRegExpNode(on_success), assertion_type_(t)
@@ -542,14 +573,6 @@ class AssertionNode : public SeqRegExpNode {
     }
     static AssertionNode* AfterNewline(RegExpNode* on_success) {
         return on_success->zone()->newInfallible<AssertionNode>(AFTER_NEWLINE, on_success);
-    }
-    static AssertionNode* NotAfterLeadSurrogate(RegExpNode* on_success) {
-        return on_success->zone()->newInfallible<AssertionNode>(NOT_AFTER_LEAD_SURROGATE,
-                                                                on_success);
-    }
-    static AssertionNode* NotInSurrogatePair(RegExpNode* on_success) {
-        return on_success->zone()->newInfallible<AssertionNode>(NOT_IN_SURROGATE_PAIR,
-                                                                on_success);
     }
     virtual void Accept(NodeVisitor* visitor);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
@@ -721,7 +744,7 @@ class ChoiceNode : public RegExpNode {
     virtual bool try_to_emit_quick_check_for_alternative(bool is_first) {
         return true;
     }
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
 
   protected:
     int GreedyLoopTextLengthForAlternative(GuardedAlternative* alternative);
@@ -771,7 +794,7 @@ class NegativeLookaroundChoiceNode : public ChoiceNode {
     virtual bool try_to_emit_quick_check_for_alternative(bool is_first) {
         return !is_first;
     }
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
 };
 
 class LoopChoiceNode : public ChoiceNode {
@@ -796,7 +819,7 @@ class LoopChoiceNode : public ChoiceNode {
     RegExpNode* continue_node() { return continue_node_; }
     bool body_can_be_zero_length() { return body_can_be_zero_length_; }
     virtual void Accept(NodeVisitor* visitor);
-    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
 
   private:
     // AddAlternative is made private for loop nodes because alternatives
@@ -854,14 +877,13 @@ ContainedInLattice AddRange(ContainedInLattice a,
 
 class BoyerMoorePositionInfo {
   public:
-    explicit BoyerMoorePositionInfo(bool unicode_ignore_case, Zone* zone)
+    explicit BoyerMoorePositionInfo(Zone* zone)
       : map_(*zone),
         map_count_(0),
         w_(kNotYet),
         s_(kNotYet),
         d_(kNotYet),
-        surrogate_(kNotYet),
-        unicode_ignore_case_(unicode_ignore_case) {
+        surrogate_(kNotYet) {
         map_.reserve(kMapSize);
         for (int i = 0; i < kMapSize; i++)
             map_.append(false);
@@ -881,15 +903,13 @@ class BoyerMoorePositionInfo {
     bool is_word() { return w_ == kLatticeIn; }
 
   private:
+    // TODO(anba): Replace with a BitSet?
     InfallibleVector<bool, 0> map_;
     int map_count_;  // Number of set bits in the map.
     ContainedInLattice w_;  // The \w character class.
     ContainedInLattice s_;  // The \s character class.
     ContainedInLattice d_;  // The \d character class.
     ContainedInLattice surrogate_;  // Surrogate UTF-16 code units.
-
-    // True if the RegExp has unicode and ignoreCase flags.
-    bool unicode_ignore_case_;
 };
 
 typedef InfallibleVector<BoyerMoorePositionInfo*, 1> BoyerMoorePositionInfoVector;
@@ -1156,11 +1176,11 @@ class NodeVisitor {
 //   +-------+        +------------+
 class Analysis : public NodeVisitor {
   public:
-    Analysis(JSContext* cx, bool ignore_case, bool is_one_byte, bool unicode)
+    Analysis(JSContext* cx, bool ignore_case, bool unicode, bool is_one_byte)
       : cx(cx),
         ignore_case_(ignore_case),
-        is_one_byte_(is_one_byte),
         unicode_(unicode),
+        is_one_byte_(is_one_byte),
         error_message_(NULL) {}
 
     void EnsureAnalyzed(RegExpNode* node);
@@ -1186,8 +1206,8 @@ class Analysis : public NodeVisitor {
   private:
     JSContext* cx;
     bool ignore_case_;
-    bool is_one_byte_;
     bool unicode_;
+    bool is_one_byte_;
     const char* error_message_;
 
     DISALLOW_IMPLICIT_CONSTRUCTORS(Analysis);
@@ -1223,9 +1243,6 @@ template <typename CharT>
 RegExpRunStatus
 InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* chars, size_t start,
               size_t length, MatchPairs* matches, size_t* endIndex);
-
-void
-AddClassNegated(const int* elmv, int elmc, CharacterRangeVector* ranges);
 
 } }  // namespace js::irregexp
 

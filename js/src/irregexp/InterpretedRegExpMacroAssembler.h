@@ -109,7 +109,7 @@ class MOZ_STACK_CLASS InterpretedRegExpMacroAssembler final : public RegExpMacro
     virtual void CheckNotBackReference(int start_reg,
                                        Label* on_no_match);
     virtual void CheckNotBackReferenceIgnoreCase(int start_reg,
-                                                 Label* on_no_match, bool unicode);
+                                                 bool unicode, Label* on_no_match);
     virtual void IfRegisterLT(int register_index, int comparand, Label* if_lt);
     virtual void IfRegisterGE(int register_index, int comparand, Label* if_ge);
     virtual void IfRegisterEqPos(int register_index, Label* if_eq);

@@ -119,24 +119,25 @@ class CharacterRange {
 
     CharacterRange(uc32 from, uc32 to) : from_(from), to_(to) {}
 
-    static void AddClassEscape(char16_t type, CharacterRangeVector* ranges,
+    static void AddClassEscape(char type, CharacterRangeVector* ranges,
                                Zone* zone);
 
     // Add class escapes. Add case equivalent closure for \w and \W if necessary.
-    static void AddClassEscape(char16_t type, CharacterRangeVector* ranges,
+    static void AddClassEscape(char type, CharacterRangeVector* ranges,
                                bool add_unicode_case_equivalents, Zone* zone);
 
     static inline CharacterRange Singleton(uc32 value) {
         return CharacterRange(value, value);
     }
     static inline CharacterRange Range(uc32 from, uc32 to) {
-        // TODO(anba): Enable/Fix assertions.
+        // TODO(anba): Enable complete assertions.
         // DCHECK(0 <= from && to <= String::kMaxCodePoint);
+        DCHECK(to <= String::kMaxCodePoint);
         DCHECK(static_cast<uint32_t>(from) <= static_cast<uint32_t>(to));
         return CharacterRange(from, to);
     }
     static inline CharacterRange Everything() {
-        return CharacterRange(0, String::kMaxUtf16CodeUnit);
+        return CharacterRange(0, String::kMaxCodePoint);
     }
     static inline CharacterRangeVector* List(Zone* zone,
                                              CharacterRange range) {
@@ -158,7 +159,6 @@ class CharacterRange {
     static void AddCaseEquivalents(Zone* zone,
                                    CharacterRangeVector* ranges,
                                    bool is_one_byte);
-    void AddCaseEquivalents(bool is_one_byte, bool unicode, CharacterRangeVector* ranges);
 
     // Whether a range list is in canonical form: Ranges ordered by from value,
     // and ranges non-overlapping and non-adjacent.
@@ -171,20 +171,11 @@ class CharacterRange {
     static void Canonicalize(CharacterRangeVector* ranges);
 
     // Negate the contents of a character range in canonical form.
-    static void Negate(CharacterRangeVector src,
-                       CharacterRangeVector* dst, Zone* zone);
+    static void Negate(CharacterRangeVector* src,
+                       CharacterRangeVector* dst);
 
     static const int kStartMarker = (1 << 24);
     static const int kPayloadMask = (1 << 24) - 1;
-
-    static void AddClassEscapeUnicode(char16_t type, CharacterRangeVector* ranges,
-                                      bool ignoreCase, Zone* zone);
-
-    static void Split(const Zone* zone,
-                      CharacterRangeVector base,
-                      const Vector<int>& overlay,
-                      CharacterRangeVector* included,
-                      CharacterRangeVector* excluded);
 
   private:
     uc32 from_;
@@ -328,9 +319,7 @@ class RegExpAssertion final : public RegExpTree {
     END_OF_LINE,
     END_OF_INPUT,
     BOUNDARY,
-    NON_BOUNDARY,
-    NOT_AFTER_LEAD_SURROGATE,
-    NOT_IN_SURROGATE_PAIR
+    NON_BOUNDARY
   };
   explicit RegExpAssertion(AssertionType type) : assertion_type_(type) { }
   void* Accept(RegExpVisitor* visitor, void* data) override;
@@ -351,8 +340,11 @@ class RegExpCharacterClass final : public RegExpTree {
   public:
     // NEGATED: The character class is negated and should match everything but
     //     the specified ranges.
+    // CONTAINS_SPLIT_SURROGATE: The character class contains part of a split
+    //     surrogate and should not be unicode-desugared (crbug.com/641091).
     enum Flag {
         NEGATED = 1 << 0,
+        CONTAINS_SPLIT_SURROGATE = 1 << 1,
     };
     using Flags = mozilla::EnumSet<Flag>;
 
@@ -370,8 +362,7 @@ class RegExpCharacterClass final : public RegExpTree {
     // The character class may match two code units for unicode regexps.
     // TODO(yangguo): we should split this class for usage in TextElement, and
     //                make max_match() dependent on the character class content.
-    // FIXME(anba): Change to |return 2| per upstream.
-    int max_match() override { return 1; }
+    int max_match() override { return 2; }
     void AppendToText(RegExpText* text, Zone* zone) override;
 
     CharacterSet character_set() { return set_; }
@@ -389,11 +380,14 @@ class RegExpCharacterClass final : public RegExpTree {
     // W : non-ASCII word character
     // d : ASCII digit
     // D : non-ASCII digit
-    // . : non-unicode non-newline
-    // * : All characters
+    // . : non-newline
+    // * : All characters, for advancing unanchored regexp
     uc16 standard_type() { return set_.standard_set_type(); }
     CharacterRangeVector* ranges(Zone* zone) { return set_.ranges(zone); }
     bool is_negated() const { return flags_.contains(NEGATED); }
+    bool contains_split_surrogate() const {
+        return flags_.contains(CONTAINS_SPLIT_SURROGATE);
+    }
 
   private:
     CharacterSet set_;

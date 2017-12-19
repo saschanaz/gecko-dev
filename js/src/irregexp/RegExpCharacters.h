@@ -36,7 +36,10 @@ namespace js {
 namespace irregexp {
 
 char16_t
-ConvertNonLatin1ToLatin1(char16_t c, bool unicode);
+ConvertNonLatin1ToLatin1(char16_t c);
+
+char16_t
+ConvertNonLatin1ToLatin1Unicode(char16_t c);
 
 // -------------------------------------------------------------------
 // CharacterRange

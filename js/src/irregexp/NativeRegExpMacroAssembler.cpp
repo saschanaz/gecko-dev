@@ -772,8 +772,8 @@ NativeRegExpMacroAssembler::CheckNotBackReference(int start_reg, Label* on_no_ma
 }
 
 void
-NativeRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(int start_reg, Label* on_no_match,
-                                                            bool unicode)
+NativeRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(int start_reg, bool unicode,
+                                                            Label* on_no_match)
 {
     JitSpew(SPEW_PREFIX "CheckNotBackReferenceIgnoreCase(%d, %d)", start_reg, unicode);
 

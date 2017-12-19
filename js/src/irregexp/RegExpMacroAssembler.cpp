@@ -33,6 +33,8 @@
 using namespace js;
 using namespace js::irregexp;
 
+using jit::Label;
+
 template <typename CharT>
 int
 irregexp::CaseInsensitiveCompareStrings(const CharT* substring1, const CharT* substring2,
@@ -98,3 +100,25 @@ template int
 irregexp::CaseInsensitiveCompareUCStrings(const char16_t* substring1,
                                           const char16_t* substring2,
                                           size_t byteLength);
+
+void RegExpMacroAssembler::CheckNotInSurrogatePair(int cp_offset,
+                                                   Label* on_failure) {
+    Label ok;
+    // Check that current character is not a trail surrogate.
+    LoadCurrentCharacter(cp_offset, &ok);
+    CheckCharacterNotInRange(kTrailSurrogateStart, kTrailSurrogateEnd, &ok);
+    // Check that previous character is not a lead surrogate.
+    LoadCurrentCharacter(cp_offset - 1, &ok);
+    CheckCharacterInRange(kLeadSurrogateStart, kLeadSurrogateEnd, on_failure);
+    Bind(&ok);
+}
+
+void RegExpMacroAssembler::CheckPosition(int cp_offset,
+                                         Label* on_outside_input) {
+    LoadCurrentCharacter(cp_offset, on_outside_input, true);
+}
+
+bool RegExpMacroAssembler::CheckSpecialCharacterClass(uc16 type,
+                                                      Label* on_no_match) {
+    return false;
+}

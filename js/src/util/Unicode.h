@@ -356,6 +356,10 @@ ChangesWhenLowerCased(JS::Latin1Char ch)
     if (lead == LEAD && trail >= TRAIL_FROM && trail <= TRAIL_TO) \
         return true;
 
+#define CALC_TRAIL(FROM, TO, LEAD, TRAIL_FROM, TRAIL_TO, DIFF) \
+    if (lead == LEAD && trail >= TRAIL_FROM && trail <= TRAIL_TO) \
+        return trail + DIFF;
+
 inline bool
 ChangesWhenUpperCasedNonBMP(char16_t lead, char16_t trail)
 {
@@ -370,16 +374,18 @@ ChangesWhenLowerCasedNonBMP(char16_t lead, char16_t trail)
     return false;
 }
 
-#undef CHECK_RANGE
+inline bool
+CanCaseFoldNonBMP(char16_t lead, char16_t trail)
+{
+    FOR_EACH_NON_BMP_CASE_FOLDING(CHECK_RANGE)
+    FOR_EACH_NON_BMP_REV_CASE_FOLDING(CHECK_RANGE)
+    return false;
+}
 
 inline char16_t
 ToUpperCaseNonBMPTrail(char16_t lead, char16_t trail)
 {
-#define CALC_TRAIL(FROM, TO, LEAD, TRAIL_FROM, TRAIL_TO, DIFF) \
-    if (lead == LEAD && trail >= TRAIL_FROM && trail <= TRAIL_TO) \
-        return trail + DIFF;
     FOR_EACH_NON_BMP_UPPERCASE(CALC_TRAIL)
-#undef CALL_TRAIL
 
     return trail;
 }
@@ -387,14 +393,21 @@ ToUpperCaseNonBMPTrail(char16_t lead, char16_t trail)
 inline char16_t
 ToLowerCaseNonBMPTrail(char16_t lead, char16_t trail)
 {
-#define CALC_TRAIL(FROM, TO, LEAD, TRAIL_FROM, TRAIL_TO, DIFF) \
-    if (lead == LEAD && trail >= TRAIL_FROM && trail <= TRAIL_TO) \
-        return trail + DIFF;
     FOR_EACH_NON_BMP_LOWERCASE(CALC_TRAIL)
-#undef CALL_TRAIL
 
     return trail;
 }
+
+inline char16_t
+CaseFoldNonBMPTrail(char16_t lead, char16_t trail)
+{
+    FOR_EACH_NON_BMP_CASE_FOLDING(CALC_TRAIL)
+    FOR_EACH_NON_BMP_REV_CASE_FOLDING(CALC_TRAIL)
+    return trail;
+}
+ 
+#undef CHECK_RANGE
+#undef CALL_TRAIL
 
 /*
  * Returns true if, independent of language/locale, the given UTF-16 code unit
@@ -625,6 +638,22 @@ UTF16Decode(char16_t lead, char16_t trail)
     MOZ_ASSERT(IsTrailSurrogate(trail));
 
     return (lead << 10) + trail + (NonBMPMin - (LeadSurrogateMin << 10) - TrailSurrogateMin);
+}
+
+inline bool
+HasCaseFold(char16_t ch)
+{
+    const FoldingInfo& info = CaseFoldInfo(ch);
+    return info.folding || info.reverse1 || info.reverse2 || info.reverse3;
+}
+
+inline bool
+HasCaseFold(uint32_t codePoint)
+{
+    if (!IsSupplementary(codePoint))
+        return HasCaseFold(static_cast<char16_t>(codePoint));
+
+    return CanCaseFoldNonBMP(LeadSurrogate(codePoint), TrailSurrogate(codePoint));
 }
 
 } /* namespace unicode */

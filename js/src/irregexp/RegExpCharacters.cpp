@@ -5,24 +5,9 @@
 #include "mozilla/Assertions.h"
 
 char16_t
-js::irregexp::ConvertNonLatin1ToLatin1(char16_t c, bool unicode)
+js::irregexp::ConvertNonLatin1ToLatin1(char16_t c)
 {
     MOZ_ASSERT(c > 0xFF, "Character mustn't be Latin1");
-    if (unicode) {
-        // "LATIN SMALL LETTER LONG S" case folds to "LATIN SMALL LETTER S".
-        if (c == 0x017F)
-            return 0x73;
-        // "LATIN CAPITAL LETTER SHARP S" case folds to "LATIN SMALL LETTER SHARP S".
-        if (c == 0x1E9E)
-            return 0xDF;
-        // "KELVIN SIGN" case folds to "LATIN SMALL LETTER K".
-        if (c == 0x212A)
-            return 0x6B;
-        // "ANGSTROM SIGN" case folds to "LATIN SMALL LETTER A WITH RING ABOVE".
-        if (c == 0x212B)
-            return 0xE5;
-    }
-
     // "GREEK CAPITAL LETTER MU" case maps to "MICRO SIGN".
     // "GREEK SMALL LETTER MU" case maps to "MICRO SIGN".
     if (c == 0x039C || c == 0x03BC)
@@ -32,6 +17,33 @@ js::irregexp::ConvertNonLatin1ToLatin1(char16_t c, bool unicode)
         return 0xFF;
     return 0;
 }
+char16_t
+js::irregexp::ConvertNonLatin1ToLatin1Unicode(char16_t c)
+{
+    MOZ_ASSERT(c > 0xFF, "Character mustn't be Latin1");
+    // "LATIN SMALL LETTER LONG S" case folds to "LATIN SMALL LETTER S".
+    if (c == 0x017F)
+        return 0x73;
+    // "LATIN CAPITAL LETTER SHARP S" case folds to "LATIN SMALL LETTER SHARP S".
+    if (c == 0x1E9E)
+        return 0xDF;
+    // "KELVIN SIGN" case folds to "LATIN SMALL LETTER K".
+    if (c == 0x212A)
+        return 0x6B;
+    // "ANGSTROM SIGN" case folds to "LATIN SMALL LETTER A WITH RING ABOVE".
+    if (c == 0x212B)
+        return 0xE5;
+    // "GREEK CAPITAL LETTER MU" case maps to "MICRO SIGN".
+    // "GREEK SMALL LETTER MU" case maps to "MICRO SIGN".
+    if (c == 0x039C || c == 0x03BC)
+        return 0xB5;
+    // "LATIN CAPITAL LETTER Y WITH DIAERESIS" case maps to "LATIN SMALL LETTER Y WITH DIAERESIS".
+    if (c == 0x0178)
+        return 0xFF;
+    return 0;
+}
+
+static constexpr int kRangeEndMarker = 0x110000;
 
 const int js::irregexp::kSpaceRanges[] = {
     0x0009, 0x000D + 1, // CHARACTER TABULATION..CARRIAGE RETURN (CR)
@@ -44,7 +56,7 @@ const int js::irregexp::kSpaceRanges[] = {
     0x205F, 0x205F + 1, // MEDIUM MATHEMATICAL SPACE
     0x3000, 0x3000 + 1, // IDEOGRAPHIC SPACE
     0xFEFF, 0xFEFF + 1, // ZERO WIDTH NO-BREAK SPACE
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kSpaceRangeCount = 21;
 
@@ -60,7 +72,7 @@ const int js::irregexp::kSpaceAndSurrogateRanges[] = {
     0x3000, 0x3000 + 1, // IDEOGRAPHIC SPACE
     0xD800, 0xDFFF + 1, // <Lead Surrogate Min>..<Trail Surrogate Max>
     0xFEFF, 0xFEFF + 1, // ZERO WIDTH NO-BREAK SPACE
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kSpaceAndSurrogateRangeCount = 23;
 
@@ -69,7 +81,7 @@ const int js::irregexp::kWordRanges[] = {
     0x0041, 0x005A + 1, // LATIN CAPITAL LETTER A..LATIN CAPITAL LETTER Z
     0x005F, 0x005F + 1, // LOW LINE
     0x0061, 0x007A + 1, // LATIN SMALL LETTER A..LATIN SMALL LETTER Z
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kWordRangeCount = 9;
 
@@ -80,7 +92,7 @@ const int js::irregexp::kIgnoreCaseWordRanges[] = {
     0x0061, 0x007A + 1, // LATIN SMALL LETTER A..LATIN SMALL LETTER Z
     0x017F, 0x017F + 1, // LATIN SMALL LETTER LONG S
     0x212A, 0x212A + 1, // KELVIN SIGN
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kIgnoreCaseWordRangeCount = 13;
 
@@ -90,7 +102,7 @@ const int js::irregexp::kWordAndSurrogateRanges[] = {
     0x005F, 0x005F + 1, // LOW LINE
     0x0061, 0x007A + 1, // LATIN SMALL LETTER A..LATIN SMALL LETTER Z
     0xD800, 0xDFFF + 1, // <Lead Surrogate Min>..<Trail Surrogate Max>
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kWordAndSurrogateRangeCount = 11;
 
@@ -103,26 +115,26 @@ const int js::irregexp::kNegatedIgnoreCaseWordAndSurrogateRanges[] = {
     0x0180, 0x2129 + 1, // LATIN SMALL LETTER B WITH STROKE..TURNED GREEK SMALL LETTER IOTA
     0x212B, 0xD7FF + 1, // ANGSTROM SIGN..<Unused>
     0xE000, 0xFFFF + 1, // Private Use..<Unused>
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kNegatedIgnoreCaseWordAndSurrogateRangeCount = 17;
 
 const int js::irregexp::kDigitRanges[] = {
     0x0030, 0x0039 + 1, // DIGIT ZERO..DIGIT NINE
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kDigitRangeCount = 3;
 
 const int js::irregexp::kDigitAndSurrogateRanges[] = {
     0x0030, 0x0039 + 1, // DIGIT ZERO..DIGIT NINE
     0xD800, 0xDFFF + 1, // <Lead Surrogate Min>..<Trail Surrogate Max>
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kDigitAndSurrogateRangeCount = 5;
 
 const int js::irregexp::kSurrogateRanges[] = {
     0xD800, 0xDFFF + 1, // <Lead Surrogate Min>..<Trail Surrogate Max>
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kSurrogateRangeCount = 3;
 
@@ -130,7 +142,7 @@ const int js::irregexp::kLineTerminatorRanges[] = {
     0x000A, 0x000A + 1, // LINE FEED (LF)
     0x000D, 0x000D + 1, // CARRIAGE RETURN (CR)
     0x2028, 0x2029 + 1, // LINE SEPARATOR..PARAGRAPH SEPARATOR
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kLineTerminatorRangeCount = 7;
 
@@ -139,6 +151,6 @@ const int js::irregexp::kLineTerminatorAndSurrogateRanges[] = {
     0x000D, 0x000D + 1, // CARRIAGE RETURN (CR)
     0x2028, 0x2029 + 1, // LINE SEPARATOR..PARAGRAPH SEPARATOR
     0xD800, 0xDFFF + 1, // <Lead Surrogate Min>..<Trail Surrogate Max>
-    0xFFFF + 1
+    kRangeEndMarker
 };
 const int js::irregexp::kLineTerminatorAndSurrogateRangeCount = 9;
