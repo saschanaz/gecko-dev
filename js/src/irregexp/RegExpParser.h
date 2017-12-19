@@ -269,7 +269,7 @@ class RegExpParser {
     bool simple();
     bool contains_anchor() { return contains_anchor_; }
     void set_contains_anchor() { contains_anchor_ = true; }
-    int captures_started() { return captures_ == nullptr ? 0 : captures_->length(); }
+    int captures_started() { return captures_started_; }
     const CharT* position() { return next_pos_ - 1; }
     bool ignore_case() const { return ignore_case_; }
     bool multiline() const { return multiline_; }
@@ -360,6 +360,7 @@ class RegExpParser {
     bool ignore_case_;
     bool multiline_;
     bool unicode_;
+    int captures_started_;
     int capture_count_;  // Only valid after we have scanned for captures.
     bool has_more_;
     bool simple_;

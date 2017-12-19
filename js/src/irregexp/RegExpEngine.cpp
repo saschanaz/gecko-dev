@@ -479,7 +479,8 @@ bool Trace::GetStoredPosition(int reg, int* cp_offset) {
     return false;
 }
 
-int Trace::FindAffectedRegisters(OutSet* affected_registers, Zone* zone) {
+int Trace::FindAffectedRegisters(OutSet* affected_registers,
+                                 Zone* zone) {
     int max_register = RegExpCompiler::kNoRegister;
     for (DeferredAction* action = actions_;
          action != nullptr;
@@ -1151,14 +1152,15 @@ typedef InfallibleVector<int, 4> RangeBoundaryVector;
 
 // even_label is for ranges[i] to ranges[i + 1] where i - start_index is even.
 // odd_label is for ranges[i] to ranges[i + 1] where i - start_index is odd.
-static void EmitUseLookupTable(RegExpMacroAssembler* masm,
-                               RangeBoundaryVector* ranges,
-                               int start_index,
-                               int end_index,
-                               int min_char,
-                               Label* fall_through,
-                               Label* even_label,
-                               Label* odd_label) {
+static void EmitUseLookupTable(
+        RegExpMacroAssembler* masm,
+        RangeBoundaryVector* ranges,
+        int start_index,
+        int end_index,
+        int min_char,
+        Label* fall_through,
+        Label* even_label,
+        Label* odd_label) {
     static const int kSize = RegExpMacroAssembler::kTableSize;
     static const int kMask = RegExpMacroAssembler::kTableMask;
 
@@ -1687,8 +1689,7 @@ int TextNode::EatsAtLeast(int still_to_find,
                                               true);
 }
 
-int NegativeLookaroundChoiceNode::EatsAtLeast(int still_to_find,
-                                              int budget,
+int NegativeLookaroundChoiceNode::EatsAtLeast(int still_to_find, int budget,
                                               bool not_at_start) {
     if (budget <= 0) return 0;
     // Alternative 0 is the negative lookahead, alternative 1 is what comes
@@ -2891,7 +2892,8 @@ void LoopChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     ChoiceNode::Emit(compiler, trace);
 }
 
-int ChoiceNode::CalculatePreloadCharacters(RegExpCompiler* compiler, int eats_at_least) {
+int ChoiceNode::CalculatePreloadCharacters(RegExpCompiler* compiler,
+                                           int eats_at_least) {
     int preload_characters = Min(4, eats_at_least);
     if (compiler->macro_assembler()->CanReadUnaligned()) {
         bool one_byte = compiler->one_byte();

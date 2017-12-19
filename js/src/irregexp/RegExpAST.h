@@ -54,6 +54,7 @@ namespace irregexp {
   VISIT(Atom)                                                        \
   VISIT(Quantifier)                                                  \
   VISIT(Capture)                                                     \
+  VISIT(Group)                                                       \
   VISIT(Lookaround)                                                  \
   VISIT(BackReference)                                               \
   VISIT(Empty)                                                       \
@@ -139,7 +140,8 @@ class CharacterRange {
     }
     static inline CharacterRangeVector* List(Zone* zone,
                                              CharacterRange range) {
-        CharacterRangeVector* list = zone->newInfallible<CharacterRangeVector>(*zone);
+        CharacterRangeVector* list =
+            zone->newInfallible<CharacterRangeVector>(*zone);
         list->append(range);
         return list;
     }
@@ -354,9 +356,6 @@ class RegExpCharacterClass final : public RegExpTree {
     };
     using Flags = mozilla::EnumSet<Flag>;
 
-    RegExpCharacterClass(CharacterRangeVector* ranges, bool is_negated)
-        : set_(ranges), flags_(is_negated ? Flags(NEGATED) : Flags()) {}
-
     explicit RegExpCharacterClass(CharacterRangeVector* ranges,
                                   Flags flags = Flags())
         : set_(ranges), flags_(flags) {}
@@ -439,7 +438,7 @@ class RegExpText final : public RegExpTree {
         elements_.append(elm);
         length_ += elm.length();
     }
-    const TextElementVector* elements() { return &elements_; }
+    TextElementVector* elements() { return &elements_; }
 
   private:
     TextElementVector elements_;
@@ -490,8 +489,8 @@ class RegExpQuantifier final : public RegExpTree {
 
 class RegExpCapture final : public RegExpTree {
   public:
-    explicit RegExpCapture(RegExpTree* body, int index)
-      : body_(body), index_(index) {}
+    explicit RegExpCapture(int index)
+      : body_(nullptr), index_(index) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
@@ -515,17 +514,38 @@ class RegExpCapture final : public RegExpTree {
     int index_;
 };
 
+class RegExpGroup final : public RegExpTree {
+  public:
+    explicit RegExpGroup(RegExpTree* body) : body_(body) {}
+    void* Accept(RegExpVisitor* visitor, void* data) override;
+    RegExpNode* ToNode(RegExpCompiler* compiler,
+                       RegExpNode* on_success) override {
+        return body_->ToNode(compiler, on_success);
+    }
+    RegExpGroup* AsGroup() override;
+    bool IsAnchoredAtStart() override { return body_->IsAnchoredAtStart(); }
+    bool IsAnchoredAtEnd() override { return body_->IsAnchoredAtEnd(); }
+    bool IsGroup() override;
+    int min_match() override { return body_->min_match(); }
+    int max_match() override { return body_->max_match(); }
+    Interval CaptureRegisters() override { return body_->CaptureRegisters(); }
+    RegExpTree* body() { return body_; }
+
+  private:
+    RegExpTree* body_;
+};
+
 class RegExpLookaround final : public RegExpTree {
   public:
     enum Type { LOOKAHEAD };
 
     RegExpLookaround(RegExpTree* body, bool is_positive, int capture_count,
-                     int capture_from)
+                     int capture_from, Type type)
       : body_(body),
         is_positive_(is_positive),
         capture_count_(capture_count),
         capture_from_(capture_from),
-        type_(LOOKAHEAD) {}
+        type_(type) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;

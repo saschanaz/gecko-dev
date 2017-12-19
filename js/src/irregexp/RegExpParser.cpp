@@ -70,13 +70,14 @@ RangeAtom(LifoAlloc* alloc, char16_t from, char16_t to)
 {
     CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
     ranges->append(CharacterRange::Range(from, to));
-    return alloc->newInfallible<RegExpCharacterClass>(ranges, false);
-} 
+    return alloc->newInfallible<RegExpCharacterClass>(ranges);
+}
 
 static inline RegExpTree*
 NegativeLookahead(LifoAlloc* alloc, char16_t from, char16_t to)
 {
-    return alloc->newInfallible<RegExpLookaround>(RangeAtom(alloc, from, to), false, 0, 0);
+    return alloc->newInfallible<RegExpLookaround>(RangeAtom(alloc, from, to), false, 0, 0,
+                                                  RegExpLookaround::LOOKAHEAD);
 }
 
 class WideCharRange
@@ -372,14 +373,16 @@ UnicodeRangesAtom(LifoAlloc* alloc,
         ranges->append(TrailSurrogateRange());
     }
     if (ranges->length() > 0) {
-        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges, is_negated));
+        RegExpCharacterClass::Flags flags;
+        if (is_negated) flags = RegExpCharacterClass::NEGATED;
+        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges, flags));
         added = true;
     }
 
     if (lead_ranges->length() > 0) {
         if (added)
             builder->NewAlternative();
-        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(lead_ranges, false));
+        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(lead_ranges));
         builder->AddAtom(NegativeLookahead(alloc, unicode::TrailSurrogateMin,
                                            unicode::TrailSurrogateMax));
         added = true;
@@ -390,7 +393,7 @@ UnicodeRangesAtom(LifoAlloc* alloc,
             builder->NewAlternative();
         builder->AddAssertion(alloc->newInfallible<RegExpAssertion>(
             RegExpAssertion::NOT_AFTER_LEAD_SURROGATE));
-        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(trail_ranges, false));
+        builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(trail_ranges));
         added = true;
     }
 
@@ -509,7 +512,7 @@ CaseFoldingSurrogatePairAtom(LifoAlloc* alloc, char16_t lead, char16_t trail, in
     CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
     ranges->append(CharacterRange::Range(trail, trail));
     ranges->append(CharacterRange::Range(trail + diff, trail + diff));
-    builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges, false));
+    builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges));
 
     return builder->ToRegExp();
 }
@@ -567,7 +570,7 @@ UnicodeEverythingAtom(LifoAlloc* alloc, bool ignore_case)
     AddClassNegated(kLineTerminatorAndSurrogateRanges,
                     kLineTerminatorAndSurrogateRangeCount,
                     ranges);
-    builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges, false));
+    builder->AddAtom(alloc->newInfallible<RegExpCharacterClass>(ranges));
 
     builder->NewAlternative();
 
@@ -635,6 +638,7 @@ RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, Zone* zone,
     ignore_case_(ignore_case),
     multiline_(multiline),
     unicode_(unicode),
+    captures_started_(0),
     capture_count_(0),
     has_more_(true),
     simple_(false),
@@ -801,24 +805,28 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             int capture_index = state->capture_index();
             SubexpressionType group_type = state->group_type();
 
-            // Restore previous state.
-            state = state->previous_state();
-            builder = state->builder();
-
             // Build result of subexpression.
             if (group_type == CAPTURE) {
-                RegExpCapture* capture = zone_->newInfallible<RegExpCapture>(body, capture_index);
-                (*captures_)[capture_index - 1] = capture;
+                RegExpCapture* capture = GetCapture(capture_index);
+                capture->set_body(body);
                 body = capture;
-            } else if (group_type != GROUPING) {
+            } else if (group_type == GROUPING) {
+                body = zone_->newInfallible<RegExpGroup>(body);
+            } else {
                 DCHECK(group_type == POSITIVE_LOOKAROUND ||
                        group_type == NEGATIVE_LOOKAROUND);
                 bool is_positive = (group_type == POSITIVE_LOOKAROUND);
                 body = zone_->newInfallible<RegExpLookaround>(
                     body, is_positive, end_capture_index - capture_index,
-                    capture_index);
+                    capture_index, state->lookaround_type());
             }
+
+            // Restore previous state.
+            state = state->previous_state();
+            builder = state->builder();
+
             builder->AddAtom(body);
+
             if (unicode_ && (group_type == POSITIVE_LOOKAROUND || group_type == NEGATIVE_LOOKAROUND))
                 continue;
             // For compatibility with JSC and ES3, we allow quantifiers after
@@ -863,7 +871,7 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             }
             CharacterRangeVector* ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
             CharacterRange::AddClassEscape('.', ranges, zone());
-            RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges, false);
+            RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges);
             builder->AddAtom(atom);
             break;
           }
@@ -890,16 +898,18 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                   default:
                     return ReportError(JSMSG_INVALID_GROUP);
                 }
-            } else {
-                if (captures_ == nullptr)
-                    captures_ = zone_->newInfallible<RegExpCaptureVector>(*zone());
-                if (captures_started() >= kMaxCaptures)
-                    return ReportError(JSMSG_TOO_MANY_PARENS);
-                captures_->append((RegExpCapture*) nullptr);
             }
+
+            if (subexpr_type == CAPTURE) {
+                if (captures_started_ >= kMaxCaptures) {
+                    return ReportError(JSMSG_TOO_MANY_PARENS);
+                }
+                captures_started_++;
+            }
+
             // Store current state and begin new disjunction parsing.
             state = zone_->newInfallible<RegExpParserState>(
-                state, subexpr_type, lookaround_type, captures_started(),
+                state, subexpr_type, lookaround_type, captures_started_,
                 ignore_case(), unicode(), zone());
             builder = state->builder();
             continue;
@@ -950,7 +960,7 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                     CharacterRange::AddClassEscapeUnicode(c, ranges, ignore_case_, zone());
                 else
                     CharacterRange::AddClassEscape(c, ranges, zone());
-                RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges, false);
+                RegExpTree* atom = zone_->newInfallible<RegExpCharacterClass>(ranges);
                 builder->AddAtom(atom);
                 break;
               }
@@ -966,19 +976,21 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
                 int index = 0;
                 bool is_backref = ParseBackReferenceIndex(&index);
                 if (is_backref) {
-                    RegExpCapture* capture = nullptr;
-                    if (captures_ != nullptr && index <= (int) captures_->length()) {
-                        capture = (*captures_)[index - 1];
-                    }
-                    if (capture == nullptr) {
+                    if (state->IsInsideCaptureGroup(index)) {
+                        // The back reference is inside the capture group it refers to.
+                        // Nothing can possibly have been captured yet, so we use empty
+                        // instead. This ensures that, when checking a back reference,
+                        // the capture registers of the referenced capture are either
+                        // both set or both cleared.
                         builder->AddEmpty();
-                        break;
+                    } else {
+                        RegExpCapture* capture = GetCapture(index);
+                        RegExpTree* atom = zone_->newInfallible<RegExpBackReference>(capture);
+                        if (unicode_)
+                            builder->AddAtom(UnicodeBackReferenceAtom(zone(), atom, ignore_case()));
+                        else
+                            builder->AddAtom(atom);
                     }
-                    RegExpTree* atom = zone_->newInfallible<RegExpBackReference>(capture);
-                    if (unicode_)
-                        builder->AddAtom(UnicodeBackReferenceAtom(zone(), atom, ignore_case()));
-                    else
-                        builder->AddAtom(atom);
                     break;
                 }
                 // With /u, no identity escapes except for syntax characters
@@ -1287,6 +1299,35 @@ bool RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out) {
     }
     *index_out = value;
     return true;
+}
+
+template <typename CharT>
+RegExpCapture* RegExpParser<CharT>::GetCapture(int index) {
+    // The index for the capture groups are one-based. Its index in the list is
+    // zero-based.
+    int know_captures =
+        is_scanned_for_captures_ ? capture_count_ : captures_started_;
+    DCHECK(index <= know_captures);
+    if (captures_ == NULL) {
+        captures_ = zone_->newInfallible<RegExpCaptureVector>(*zone());
+        captures_->reserve(know_captures);
+    }
+    while (captures_->length() < know_captures) {
+        captures_->append(zone_->newInfallible<RegExpCapture>(captures_->length() + 1));
+    }
+    return captures_->at(index - 1);
+}
+
+template <typename CharT>
+bool RegExpParser<CharT>::RegExpParserState::IsInsideCaptureGroup(int index) {
+    for (RegExpParserState* s = this; s != NULL; s = s->previous_state()) {
+        if (s->group_type() != CAPTURE) continue;
+        // Return true if we found the matching capture index.
+        if (index == s->capture_index()) return true;
+        // Abort if index is larger than what has been parsed up till this state.
+        if (index > s->capture_index()) return false;
+    }
+    return false;
 }
 
 // QuantifierPrefix ::
@@ -1641,14 +1682,16 @@ RegExpParser<CharT>::ParseCharacterClass()
             ranges->append(CharacterRange::Everything());
             is_negated = !is_negated;
         }
-        return zone_->newInfallible<RegExpCharacterClass>(ranges, is_negated);
+        RegExpCharacterClass::Flags flags;
+        if (is_negated) flags = RegExpCharacterClass::NEGATED;
+        return zone_->newInfallible<RegExpCharacterClass>(ranges, flags);
     }
 
     if (!is_negated && ranges->length() == 0 && lead_ranges->length() == 0 &&
         trail_ranges->length() == 0 && wide_ranges->length() == 0)
     {
         ranges->append(CharacterRange::Everything());
-        return zone_->newInfallible<RegExpCharacterClass>(ranges, true);
+        return zone_->newInfallible<RegExpCharacterClass>(ranges, RegExpCharacterClass::NEGATED);
     }
 
     return UnicodeRangesAtom(zone(), ranges, lead_ranges, trail_ranges, wide_ranges, is_negated,
