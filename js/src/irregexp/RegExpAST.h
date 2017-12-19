@@ -264,9 +264,7 @@ class RegExpTree {
     // Returns the interval of registers used for captures within this
     // expression.
     virtual Interval CaptureRegisters() { return Interval::Empty(); }
-    virtual void AppendToText(RegExpText* text) {
-        MOZ_CRASH("Bad call");
-    }
+    virtual void AppendToText(RegExpText* text);
 #define MAKE_ASTYPE(Name)                                               \
     virtual RegExp##Name* As##Name();                                   \
     virtual bool Is##Name();

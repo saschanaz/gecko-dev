@@ -77,6 +77,23 @@ class InfallibleVector
     T& at(size_t index) { return vector_[index]; }
     const T& at(size_t index) const { return vector_[index]; }
 
+    T& last() {
+        MOZ_ASSERT(length() > 0);
+        return at(length() - 1);
+    }
+    const T& last() const {
+        MOZ_ASSERT(length() > 0);
+        return at(length() - 1);
+    }
+
+    bool contains(const T& value) const {
+        for (size_t i = 0; i < length(); i++) {
+            if (at(i) == value)
+                return true;
+        }
+        return false;
+    }
+
     InfallibleVector& operator=(InfallibleVector&& rhs) { vector_ = Move(rhs.vector_); return *this; }
 };
 

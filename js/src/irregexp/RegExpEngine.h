@@ -57,15 +57,11 @@ class BoyerMooreLookahead;
 
 // A set of unsigned integers that behaves especially well on small
 // integers (< 32).
-class OutSet
-{
+class OutSet {
   public:
-    OutSet()
-      : first_(0), remaining_(nullptr), successors_(nullptr)
-    {}
-
+    OutSet() : first_(0), remaining_(nullptr), successors_(nullptr) {}
     OutSet* Extend(LifoAlloc* alloc, unsigned value);
-    bool Get(unsigned value);
+    bool Get(unsigned value) const;
     static const unsigned kFirstLimit = 32;
 
   private:
@@ -83,9 +79,9 @@ class OutSet
     OutSetVector* successors() { return successors_; }
 
     OutSet(uint32_t first, RemainingVector* remaining)
-      : first_(first), remaining_(remaining), successors_(nullptr)
-    {}
+      : first_(first), remaining_(remaining), successors_(nullptr) {}
 
+    const RemainingVector& remaining() const { return *remaining_; }
     RemainingVector& remaining() { return *remaining_; }
 
     uint32_t first_;
@@ -107,8 +103,7 @@ struct PreloadState;
 class GreedyLoopState;
 class AlternativeGenerationList;
 
-struct NodeInfo
-{
+struct NodeInfo {
     NodeInfo()
       : being_analyzed(false),
         been_analyzed(false),
@@ -117,8 +112,7 @@ struct NodeInfo
         follows_start_interest(false),
         at_end(false),
         visited(false),
-        replacement_calculated(false)
-    {}
+        replacement_calculated(false) {}
 
     // Returns true if the interests and assumptions of this node
     // matches the given one.
@@ -173,22 +167,19 @@ struct NodeInfo
 
 // Details of a quick mask-compare check that can look ahead in the
 // input stream.
-class QuickCheckDetails
-{
+class QuickCheckDetails {
   public:
     QuickCheckDetails()
       : characters_(0),
         mask_(0),
         value_(0),
-        cannot_match_(false)
-    {}
+        cannot_match_(false) {}
 
     explicit QuickCheckDetails(int characters)
       : characters_(characters),
         mask_(0),
         value_(0),
-        cannot_match_(false)
-    {}
+        cannot_match_(false) {}
 
     bool Rationalize(bool latin1);
 
@@ -203,15 +194,15 @@ class QuickCheckDetails
     bool cannot_match() { return cannot_match_; }
     void set_cannot_match() { cannot_match_ = true; }
 
-    int characters() { return characters_; }
-    void set_characters(int characters) { characters_ = characters; }
-
     struct Position {
-        Position() : mask(0), value(0), determines_perfectly(false) { }
-        char16_t mask;
-        char16_t value;
+        Position() : mask(0), value(0), determines_perfectly(false) {}
+        uc16 mask;
+        uc16 value;
         bool determines_perfectly;
     };
+
+    int characters() { return characters_; }
+    void set_characters(int characters) { characters_ = characters; }
 
     Position* positions(int index) {
         MOZ_ASSERT(index >= 0);
@@ -237,10 +228,12 @@ class QuickCheckDetails
     bool cannot_match_;
 };
 
-class RegExpNode
-{
+class RegExpNode {
   public:
-    explicit RegExpNode(LifoAlloc* alloc);
+    explicit RegExpNode(LifoAlloc* alloc)
+      : replacement_(nullptr), trace_count_(0), alloc_(alloc) {
+      bm_info_[0] = bm_info_[1] = nullptr;
+    }
     virtual ~RegExpNode() {}
     virtual void Accept(NodeVisitor* visitor) = 0;
 
@@ -285,24 +278,23 @@ class RegExpNode
         return nullptr;
     }
 
-    static const int kRecursionBudget = 200;
-
     // Collects information on the possible code units (mod 128) that can match if
     // we look forward.  This is used for a Boyer-Moore-like string searching
     // implementation.  TODO(erikcorry):  This should share more code with
     // EatsAtLeast, GetQuickCheckDetails.  The budget argument is used to limit
     // the number of nodes we are willing to look at in order to create this data.
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start) {
+    static const int kRecursionBudget = 200;
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start) {
         MOZ_CRASH("Bad call");
     }
 
     // If we know that the input is ASCII then there are some nodes that can
     // never match.  This method returns a node that can be substituted for
     // itself, or nullptr if the node can never match.
-    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode) { return this; }
+    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode) {
+        return this;
+    }
 
     // Helper for FilterLATIN1.
     RegExpNode* replacement() {
@@ -366,20 +358,16 @@ class RegExpNode
     LifoAlloc* alloc_;
 };
 
-class SeqRegExpNode : public RegExpNode
-{
+class SeqRegExpNode : public RegExpNode {
   public:
     explicit SeqRegExpNode(RegExpNode* on_success)
-      : RegExpNode(on_success->alloc()), on_success_(on_success)
-    {}
+      : RegExpNode(on_success->alloc()), on_success_(on_success) {}
 
     RegExpNode* on_success() { return on_success_; }
     void set_on_success(RegExpNode* node) { on_success_ = node; }
     virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
 
   protected:
     RegExpNode* FilterSuccessor(int depth, bool ignore_case, bool unicode);
@@ -388,8 +376,7 @@ class SeqRegExpNode : public RegExpNode
     RegExpNode* on_success_;
 };
 
-class ActionNode : public SeqRegExpNode
-{
+class ActionNode : public SeqRegExpNode {
   public:
     enum ActionType {
         SET_REGISTER,
@@ -434,10 +421,8 @@ class ActionNode : public SeqRegExpNode
         return on_success()->GetQuickCheckDetails(
                                                   details, compiler, filled_in, not_at_start);
     }
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
     ActionType action_type() { return action_type_; }
     // TODO(erikcorry): We should allow some action nodes in greedy loops.
     virtual int GreedyLoopTextLength() { return kNodeIsTooComplexForGreedyLoops; }
@@ -475,20 +460,17 @@ class ActionNode : public SeqRegExpNode
     friend class DotPrinter;
 };
 
-class TextNode : public SeqRegExpNode
-{
+class TextNode : public SeqRegExpNode {
   public:
     TextNode(TextElementVector* elements,
              RegExpNode* on_success)
       : SeqRegExpNode(on_success),
-        elements_(elements)
-    {}
+        elements_(elements) {}
 
     TextNode(RegExpCharacterClass* that,
              RegExpNode* on_success)
       : SeqRegExpNode(on_success),
-        elements_(alloc()->newInfallible<TextElementVector>(*alloc()))
-    {
+        elements_(alloc()->newInfallible<TextElementVector>(*alloc())) {
         elements_->append(TextElement::CharClass(that));
     }
 
@@ -504,10 +486,8 @@ class TextNode : public SeqRegExpNode
     virtual int GreedyLoopTextLength();
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
                                                          RegExpCompiler* compiler);
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
     void CalculateOffsets();
     virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
 
@@ -533,8 +513,7 @@ class TextNode : public SeqRegExpNode
     TextElementVector* elements_;
 };
 
-class AssertionNode : public SeqRegExpNode
-{
+class AssertionNode : public SeqRegExpNode {
   public:
     enum AssertionType {
         AT_END,
@@ -579,10 +558,8 @@ class AssertionNode : public SeqRegExpNode
                                       RegExpCompiler* compiler,
                                       int filled_in,
                                       bool not_at_start);
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
     AssertionType assertion_type() { return assertion_type_; }
 
   private:
@@ -602,8 +579,7 @@ class BackReferenceNode : public SeqRegExpNode
                       RegExpNode* on_success)
       : SeqRegExpNode(on_success),
         start_reg_(start_reg),
-        end_reg_(end_reg)
-    {}
+        end_reg_(end_reg) {}
 
     virtual void Accept(NodeVisitor* visitor);
     int start_register() { return start_reg_; }
@@ -616,25 +592,22 @@ class BackReferenceNode : public SeqRegExpNode
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start) {
+        return;
     }
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
 
   private:
     int start_reg_;
     int end_reg_;
 };
 
-class EndNode : public RegExpNode
-{
+class EndNode : public RegExpNode {
   public:
     enum Action { ACCEPT, BACKTRACK, NEGATIVE_SUBMATCH_SUCCESS };
 
     explicit EndNode(LifoAlloc* alloc, Action action)
-      : RegExpNode(alloc), action_(action)
-    {}
+      : RegExpNode(alloc), action_(action) {}
 
     virtual void Accept(NodeVisitor* visitor);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
@@ -644,15 +617,12 @@ class EndNode : public RegExpNode
     virtual void GetQuickCheckDetails(QuickCheckDetails* details,
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
-                                      bool not_at_start)
-    {
+                                      bool not_at_start) {
         // Returning 0 from EatsAtLeast should ensure we never get here.
         MOZ_CRASH("Bad call");
     }
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start) {
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start) {
         // Returning 0 from EatsAtLeast should ensure we never get here.
         MOZ_CRASH("Bad call");
     }
@@ -661,8 +631,7 @@ class EndNode : public RegExpNode
     Action action_;
 };
 
-class NegativeSubmatchSuccess : public EndNode
-{
+class NegativeSubmatchSuccess : public EndNode {
   public:
     NegativeSubmatchSuccess(LifoAlloc* alloc,
                             int stack_pointer_reg,
@@ -673,8 +642,7 @@ class NegativeSubmatchSuccess : public EndNode
         stack_pointer_register_(stack_pointer_reg),
         current_position_register_(position_reg),
         clear_capture_count_(clear_capture_count),
-        clear_capture_start_(clear_capture_start)
-    {}
+        clear_capture_start_(clear_capture_start) {}
 
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
 
@@ -685,15 +653,13 @@ class NegativeSubmatchSuccess : public EndNode
     int clear_capture_start_;
 };
 
-class Guard
-{
+class Guard {
   public:
     enum Relation { LT, GEQ };
     Guard(int reg, Relation op, int value)
         : reg_(reg),
           op_(op),
-          value_(value)
-    {}
+          value_(value) {}
 
     int reg() { return reg_; }
     Relation op() { return op_; }
@@ -707,12 +673,10 @@ class Guard
 
 typedef InfallibleVector<Guard*, 1> GuardVector;
 
-class GuardedAlternative
-{
+class GuardedAlternative {
   public:
     explicit GuardedAlternative(RegExpNode* node)
-      : node_(node), guards_(nullptr)
-    {}
+      : node_(node), guards_(nullptr) {}
 
     void AddGuard(LifoAlloc* alloc, Guard* guard);
     RegExpNode* node() const { return node_; }
@@ -728,15 +692,13 @@ typedef InfallibleVector<GuardedAlternative, 0> GuardedAlternativeVector;
 
 class AlternativeGeneration;
 
-class ChoiceNode : public RegExpNode
-{
+class ChoiceNode : public RegExpNode {
   public:
     explicit ChoiceNode(LifoAlloc* alloc, int expected_size)
       : RegExpNode(alloc),
         alternatives_(*alloc),
         not_at_start_(false),
-        being_calculated_(false)
-    {
+        being_calculated_(false) {
         alternatives_.reserve(expected_size);
     }
 
@@ -756,10 +718,8 @@ class ChoiceNode : public RegExpNode
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
 
     bool being_calculated() { return being_calculated_; }
     bool not_at_start() { return not_at_start_; }
@@ -791,14 +751,12 @@ class ChoiceNode : public RegExpNode
     bool being_calculated_;
 };
 
-class NegativeLookaheadChoiceNode : public ChoiceNode
-{
+class NegativeLookaheadChoiceNode : public ChoiceNode {
   public:
     explicit NegativeLookaheadChoiceNode(LifoAlloc* alloc,
                                          GuardedAlternative this_must_fail,
                                          GuardedAlternative then_do_this)
-      : ChoiceNode(alloc, 2)
-    {
+      : ChoiceNode(alloc, 2) {
         AddAlternative(this_must_fail);
         AddAlternative(then_do_this);
     }
@@ -807,29 +765,27 @@ class NegativeLookaheadChoiceNode : public ChoiceNode
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
 
     // For a negative lookahead we don't emit the quick check for the
     // alternative that is expected to fail.  This is because quick check code
     // starts by loading enough characters for the alternative that takes fewest
     // characters, but on a negative lookahead the negative branch did not take
     // part in that calculation (EatsAtLeast) so the assumptions don't hold.
-    virtual bool try_to_emit_quick_check_for_alternative(int i) { return i != 0; }
+    virtual bool try_to_emit_quick_check_for_alternative(int i) {
+        return i != 0;
+    }
     virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
 };
 
-class LoopChoiceNode : public ChoiceNode
-{
+class LoopChoiceNode : public ChoiceNode {
   public:
     explicit LoopChoiceNode(LifoAlloc* alloc, bool body_can_be_zero_length)
       : ChoiceNode(alloc, 2),
         loop_node_(nullptr),
         continue_node_(nullptr),
-        body_can_be_zero_length_(body_can_be_zero_length)
-    {}
+        body_can_be_zero_length_(body_can_be_zero_length) {}
 
     void AddLoopAlternative(GuardedAlternative alt);
     void AddContinueAlternative(GuardedAlternative alt);
@@ -839,10 +795,8 @@ class LoopChoiceNode : public ChoiceNode
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    virtual bool FillInBMInfo(int offset,
-                              int budget,
-                              BoyerMooreLookahead* bm,
-                              bool not_at_start);
+    virtual bool FillInBMInfo(int offset, int budget,
+                              BoyerMooreLookahead* bm, bool not_at_start);
     RegExpNode* loop_node() { return loop_node_; }
     RegExpNode* continue_node() { return continue_node_; }
     bool body_can_be_zero_length() { return body_can_be_zero_length_; }
@@ -894,19 +848,16 @@ enum ContainedInLattice {
   kLatticeUnknown = 3  // Can also mean both in and out.
 };
 
-inline ContainedInLattice
-Combine(ContainedInLattice a, ContainedInLattice b) {
+inline ContainedInLattice Combine(ContainedInLattice a, ContainedInLattice b) {
     return static_cast<ContainedInLattice>(a | b);
 }
 
-ContainedInLattice
-AddRange(ContainedInLattice a,
-         const int* ranges,
-         int ranges_size,
-         Interval new_range);
+ContainedInLattice AddRange(ContainedInLattice a,
+                            const int* ranges,
+                            int ranges_size,
+                            Interval new_range);
 
-class BoyerMoorePositionInfo
-{
+class BoyerMoorePositionInfo {
   public:
     explicit BoyerMoorePositionInfo(LifoAlloc* alloc, bool unicode_ignore_case)
       : map_(*alloc),
@@ -915,14 +866,13 @@ class BoyerMoorePositionInfo
         s_(kNotYet),
         d_(kNotYet),
         surrogate_(kNotYet),
-        unicode_ignore_case_(unicode_ignore_case)
-    {
+        unicode_ignore_case_(unicode_ignore_case) {
         map_.reserve(kMapSize);
         for (int i = 0; i < kMapSize; i++)
             map_.append(false);
     }
 
-    bool& at(int i) { return map_[i]; }
+    bool& at(int i) { return map_.at(i); }
 
     static const int kMapSize = 128;
     static const int kMask = kMapSize - 1;
@@ -949,8 +899,7 @@ class BoyerMoorePositionInfo
 
 typedef InfallibleVector<BoyerMoorePositionInfo*, 1> BoyerMoorePositionInfoVector;
 
-class BoyerMooreLookahead
-{
+class BoyerMooreLookahead {
   public:
     BoyerMooreLookahead(LifoAlloc* alloc, size_t length, RegExpCompiler* compiler);
 
@@ -959,20 +908,20 @@ class BoyerMooreLookahead
     RegExpCompiler* compiler() { return compiler_; }
 
     int Count(int map_number) {
-        return bitmaps_[map_number]->map_count();
+        return bitmaps_.at(map_number)->map_count();
     }
 
-    BoyerMoorePositionInfo* at(int i) { return bitmaps_[i]; }
+    BoyerMoorePositionInfo* at(int i) { return bitmaps_.at(i); }
 
     void Set(int map_number, int character) {
         if (character > max_char_) return;
-        BoyerMoorePositionInfo* info = bitmaps_[map_number];
+        BoyerMoorePositionInfo* info = bitmaps_.at(map_number);
         info->Set(character);
     }
 
     void SetInterval(int map_number, const Interval& interval) {
         if (interval.from() > max_char_) return;
-        BoyerMoorePositionInfo* info = bitmaps_[map_number];
+        BoyerMoorePositionInfo* info = bitmaps_.at(map_number);
         if (interval.to() > max_char_) {
             info->SetInterval(Interval(interval.from(), max_char_));
         } else {
@@ -981,7 +930,7 @@ class BoyerMooreLookahead
     }
 
     void SetAll(int map_number) {
-        bitmaps_[map_number]->SetAll();
+        bitmaps_.at(map_number)->SetAll();
     }
 
     void SetRest(int from_map) {
@@ -1007,7 +956,8 @@ class BoyerMooreLookahead
                      int max_lookahead,
                      uint8_t* boolean_skip_table);
     bool FindWorthwhileInterval(int* from, int* to);
-    int FindBestInterval(int max_number_of_chars, int old_biggest_points, int* from, int* to);
+    int FindBestInterval(
+        int max_number_of_chars, int old_biggest_points, int* from, int* to);
 };
 
 // There are many ways to generate code for a node.  This class encapsulates
@@ -1021,8 +971,7 @@ class BoyerMooreLookahead
 // to match foo is generated only once (the traces have a common prefix).  The
 // code to store the capture is deferred and generated (twice) after the places
 // where baz has been matched.
-class Trace
-{
+class Trace {
   public:
     // A value for a property that is either known to be true, know to be false,
     // or not known.
@@ -1033,8 +982,7 @@ class Trace
     class DeferredAction {
       public:
         DeferredAction(ActionNode::ActionType action_type, int reg)
-          : action_type_(action_type), reg_(reg), next_(nullptr)
-        {}
+          : action_type_(action_type), reg_(reg), next_(nullptr) {}
 
         DeferredAction* next() { return next_; }
         bool Mentions(int reg);
@@ -1052,8 +1000,7 @@ class Trace
         DeferredCapture(int reg, bool is_capture, Trace* trace)
           : DeferredAction(ActionNode::STORE_POSITION, reg),
             cp_offset_(trace->cp_offset()),
-            is_capture_(is_capture)
-        {}
+            is_capture_(is_capture) {}
 
         int cp_offset() { return cp_offset_; }
         bool is_capture() { return is_capture_; }
@@ -1067,8 +1014,7 @@ class Trace
       public:
         DeferredSetRegister(int reg, int value)
           : DeferredAction(ActionNode::SET_REGISTER, reg),
-            value_(value)
-        {}
+            value_(value) {}
         int value() { return value_; }
       private:
         int value_;
@@ -1078,8 +1024,7 @@ class Trace
       public:
         explicit DeferredClearCaptures(Interval range)
           : DeferredAction(ActionNode::CLEAR_CAPTURES, -1),
-            range_(range)
-        {}
+            range_(range) {}
 
         Interval range() { return range_; }
       private:
@@ -1089,8 +1034,7 @@ class Trace
     class DeferredIncrementRegister : public DeferredAction {
       public:
         explicit DeferredIncrementRegister(int reg)
-          : DeferredAction(ActionNode::INCREMENT_REGISTER, reg)
-        {}
+          : DeferredAction(ActionNode::INCREMENT_REGISTER, reg) {}
     };
 
     Trace()
@@ -1102,8 +1046,7 @@ class Trace
         characters_preloaded_(0),
         bound_checked_up_to_(0),
         flush_budget_(100),
-        at_start_(UNKNOWN)
-    {}
+        at_start_(UNKNOWN) {}
 
     // End the trace.  This involves flushing the deferred actions in the trace
     // and pushing a backtrack location onto the backtrack stack.  Once this is
@@ -1177,13 +1120,13 @@ class Trace
     void PerformDeferredActions(LifoAlloc* alloc,
                                 RegExpMacroAssembler* macro,
                                 int max_register,
-                                OutSet& affected_registers,
+                                const OutSet& affected_registers,
                                 OutSet* registers_to_pop,
                                 OutSet* registers_to_clear);
     void RestoreAffectedRegisters(RegExpMacroAssembler* macro,
                                   int max_register,
-                                  OutSet& registers_to_pop,
-                                  OutSet& registers_to_clear);
+                                  const OutSet& registers_to_pop,
+                                  const OutSet& registers_to_clear);
     int cp_offset_;
     DeferredAction* actions_;
     jit::Label* backtrack_;
@@ -1196,10 +1139,9 @@ class Trace
     TriBool at_start_;
 };
 
-class NodeVisitor
-{
+class NodeVisitor {
   public:
-    virtual ~NodeVisitor() { }
+    virtual ~NodeVisitor() {}
 #define DECLARE_VISIT(Type)                                          \
     virtual void Visit##Type(Type##Node* that) = 0;
     FOR_EACH_NODE_TYPE(DECLARE_VISIT)
@@ -1219,16 +1161,14 @@ class NodeVisitor
 //   +-------+  --->  +------------+
 //   | word? |        | check word |
 //   +-------+        +------------+
-class Analysis : public NodeVisitor
-{
+class Analysis : public NodeVisitor {
   public:
     Analysis(JSContext* cx, bool ignore_case, bool is_latin1, bool unicode)
       : cx(cx),
         ignore_case_(ignore_case),
         is_latin1_(is_latin1),
         unicode_(unicode),
-        error_message_(nullptr)
-    {}
+        error_message_(nullptr) {}
 
     void EnsureAnalyzed(RegExpNode* node);
 
@@ -1258,14 +1198,12 @@ class Analysis : public NodeVisitor
     void operator=(Analysis&) = delete;
 };
 
-struct RegExpCompileData
-{
+struct RegExpCompileData {
     RegExpCompileData()
       : tree(nullptr),
         simple(true),
         contains_anchor(false),
-        capture_count(0)
-    {}
+        capture_count(0) {}
 
     RegExpTree* tree;
     bool simple;
