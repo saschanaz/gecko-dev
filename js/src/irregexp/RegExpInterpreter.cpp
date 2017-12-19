@@ -31,6 +31,7 @@
 // A simple interpreter for the Irregexp byte code.
 
 #include "irregexp/RegExpBytecode.h"
+#include "irregexp/RegExpEngine.h"
 #include "irregexp/RegExpMacroAssembler.h"
 #include "vm/MatchPairs.h"
 

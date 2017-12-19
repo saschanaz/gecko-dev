@@ -1206,24 +1206,6 @@ struct RegExpCompileData {
     int capture_count;
 };
 
-struct RegExpCode
-{
-    jit::JitCode* jitCode;
-    uint8_t* byteCode;
-
-    RegExpCode()
-      : jitCode(nullptr), byteCode(nullptr)
-    {}
-
-    bool empty() {
-        return !jitCode && !byteCode;
-    }
-
-    void destroy() {
-        js_free(byteCode);
-    }
-};
-
 RegExpCode
 CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompileData* data,
                HandleLinearString sample,  bool is_global, bool ignore_case,

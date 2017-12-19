@@ -37,6 +37,11 @@
 #include "js/Vector.h"
 
 namespace js {
+
+namespace jit {
+    class JitCode;
+}
+
 namespace irregexp {
 
 #define DCHECK(...) MOZ_ASSERT(__VA_ARGS__)
@@ -130,6 +135,25 @@ class InfallibleVector
     }
 
     InfallibleVector& operator=(InfallibleVector&& rhs) { vector_ = Move(rhs.vector_); return *this; }
+};
+
+// TODO(anba): Maybe move to different file?
+struct RegExpCode
+{
+    jit::JitCode* jitCode;
+    uint8_t* byteCode;
+
+    RegExpCode()
+      : jitCode(nullptr), byteCode(nullptr)
+    {}
+
+    bool empty() {
+        return !jitCode && !byteCode;
+    }
+
+    void destroy() {
+        js_free(byteCode);
+    }
 };
 
 }}  // namespace js::irregexp

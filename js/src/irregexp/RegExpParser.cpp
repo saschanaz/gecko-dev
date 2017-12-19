@@ -36,6 +36,7 @@
 #include "frontend/TokenStream.h"
 #include "gc/GC.h"
 #include "irregexp/RegExpCharacters.h"
+#include "irregexp/RegExpEngine.h"
 #include "util/StringBuffer.h"
 #include "vm/ErrorReporting.h"
 

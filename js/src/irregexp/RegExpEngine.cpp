@@ -31,6 +31,7 @@
 #include "irregexp/RegExpEngine.h"
 
 #include "gc/GC.h"
+#include "irregexp/InterpretedRegExpMacroAssembler.h"
 #include "irregexp/NativeRegExpMacroAssembler.h"
 #include "irregexp/RegExpCharacters.h"
 #include "irregexp/RegExpMacroAssembler.h"
