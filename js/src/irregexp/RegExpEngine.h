@@ -181,7 +181,7 @@ class QuickCheckDetails {
         value_(0),
         cannot_match_(false) {}
 
-    bool Rationalize(bool latin1);
+    bool Rationalize(bool one_byte);
 
     // Merge in the information from another branch of an alternation.
     void Merge(QuickCheckDetails* other, int from_index);
@@ -290,14 +290,14 @@ class RegExpNode {
         MOZ_CRASH("Bad call");
     }
 
-    // If we know that the input is ASCII then there are some nodes that can
+    // If we know that the input is one-byte then there are some nodes that can
     // never match.  This method returns a node that can be substituted for
     // itself, or nullptr if the node can never match.
-    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode) {
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode) {
         return this;
     }
 
-    // Helper for FilterLATIN1.
+    // Helper for FilterOneByte.
     RegExpNode* replacement() {
         DCHECK(info()->replacement_calculated);
         return replacement_;
@@ -366,7 +366,7 @@ class SeqRegExpNode : public RegExpNode {
 
     RegExpNode* on_success() { return on_success_; }
     void set_on_success(RegExpNode* node) { on_success_ = node; }
-    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
     virtual bool FillInBMInfo(int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start);
 
@@ -483,14 +483,14 @@ class TextNode : public SeqRegExpNode {
                                       int characters_filled_in,
                                       bool not_at_start);
     TextElementVector* elements() { return elements_; }
-    void MakeCaseIndependent(bool is_latin1, bool unicode);
+    void MakeCaseIndependent(bool is_one_byte, bool unicode);
     virtual int GreedyLoopTextLength();
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
                                                          RegExpCompiler* compiler);
     virtual bool FillInBMInfo(int offset, int budget,
                               BoyerMooreLookahead* bm, bool not_at_start);
     void CalculateOffsets();
-    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
 
   private:
     enum TextEmitPassType {
@@ -725,7 +725,7 @@ class ChoiceNode : public RegExpNode {
     void set_not_at_start() { not_at_start_ = true; }
     void set_being_calculated(bool b) { being_calculated_ = b; }
     virtual bool try_to_emit_quick_check_for_alternative(int i) { return true; }
-    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
 
   protected:
     int GreedyLoopTextLengthForAlternative(GuardedAlternative* alternative);
@@ -775,7 +775,7 @@ class NegativeLookaheadChoiceNode : public ChoiceNode {
     virtual bool try_to_emit_quick_check_for_alternative(int i) {
         return i != 0;
     }
-    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
 };
 
 class LoopChoiceNode : public ChoiceNode {
@@ -800,7 +800,7 @@ class LoopChoiceNode : public ChoiceNode {
     RegExpNode* continue_node() { return continue_node_; }
     bool body_can_be_zero_length() { return body_can_be_zero_length_; }
     virtual void Accept(NodeVisitor* visitor);
-    virtual RegExpNode* FilterLATIN1(int depth, bool ignore_case, bool unicode);
+    virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
 
   private:
     // AddAlternative is made private for loop nodes because alternatives
@@ -947,7 +947,7 @@ class BoyerMooreLookahead {
     int length_;
     RegExpCompiler* compiler_;
 
-    // 0xff for LATIN1, 0xffff for UTF-16.
+    // 0xff for Latin1, 0xffff for UTF-16.
     int max_char_;
     BoyerMoorePositionInfoVector bitmaps_;
 
@@ -1068,12 +1068,12 @@ class Trace {
     // generated to that code.
     bool is_trivial() {
         return backtrack_ == nullptr &&
-            actions_ == nullptr &&
-            cp_offset_ == 0 &&
-            characters_preloaded_ == 0 &&
-            bound_checked_up_to_ == 0 &&
-            quick_check_performed_.characters() == 0 &&
-            at_start_ == UNKNOWN;
+               actions_ == nullptr &&
+               cp_offset_ == 0 &&
+               characters_preloaded_ == 0 &&
+               bound_checked_up_to_ == 0 &&
+               quick_check_performed_.characters() == 0 &&
+               at_start_ == UNKNOWN;
     }
 
     TriBool at_start() { return at_start_; }
@@ -1162,10 +1162,10 @@ class NodeVisitor {
 //   +-------+        +------------+
 class Analysis : public NodeVisitor {
   public:
-    Analysis(JSContext* cx, bool ignore_case, bool is_latin1, bool unicode)
+    Analysis(JSContext* cx, bool ignore_case, bool is_one_byte, bool unicode)
       : cx(cx),
         ignore_case_(ignore_case),
-        is_latin1_(is_latin1),
+        is_one_byte_(is_one_byte),
         unicode_(unicode),
         error_message_(nullptr) {}
 
@@ -1178,18 +1178,18 @@ class Analysis : public NodeVisitor {
     virtual void VisitLoopChoice(LoopChoiceNode* that);
 
     bool has_failed() { return error_message_ != nullptr; }
-    const char* errorMessage() {
+    const char* error_message() {
         DCHECK(error_message_ != nullptr);
         return error_message_;
     }
-    void failASCII(const char* error_message) {
+    void fail(const char* error_message) {
         error_message_ = error_message;
     }
 
   private:
     JSContext* cx;
     bool ignore_case_;
-    bool is_latin1_;
+    bool is_one_byte_;
     bool unicode_;
     const char* error_message_;
 
@@ -1231,7 +1231,7 @@ struct RegExpCode
 RegExpCode
 CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompileData* data,
                HandleLinearString sample,  bool is_global, bool ignore_case,
-               bool is_latin1, bool match_only, bool force_bytecode, bool sticky,
+               bool is_one_byte, bool match_only, bool force_bytecode, bool sticky,
                bool unicode, RegExpShared::JitCodeTables& tables);
 
 // Note: this may return RegExpRunStatus_Error if an interrupt was requested

@@ -156,7 +156,7 @@ class CharacterRange {
     static void AddCaseEquivalents(LifoAlloc* alloc,
                                    CharacterRangeVector* ranges,
                                    bool is_one_byte);
-    void AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeVector* ranges);
+    void AddCaseEquivalents(bool is_one_byte, bool unicode, CharacterRangeVector* ranges);
 
     // Whether a range list is in canonical form: Ranges ordered by from value,
     // and ranges non-overlapping and non-adjacent.

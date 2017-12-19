@@ -313,7 +313,7 @@ class FrequencyCollator {
 class irregexp::RegExpCompiler {
   public:
     RegExpCompiler(JSContext* cx, LifoAlloc* alloc, int capture_count,
-                   bool ignore_case, bool is_latin1, bool match_only, bool unicode);
+                   bool ignore_case, bool is_one_byte, bool match_only, bool unicode);
 
     int AllocateRegister() {
         if (next_register_ >= RegExpMacroAssembler::kMaxRegister) {
@@ -350,7 +350,7 @@ class irregexp::RegExpCompiler {
     inline bool isRegExpTooBig() { return reg_exp_too_big_; }
 
     inline bool ignore_case() { return ignore_case_; }
-    inline bool latin1() { return latin1_; }
+    inline bool one_byte() { return one_byte_; }
     inline bool unicode() { return unicode_; }
     FrequencyCollator* frequency_collator() { return &frequency_collator_; }
 
@@ -373,7 +373,7 @@ class irregexp::RegExpCompiler {
     int recursion_depth_;
     RegExpMacroAssembler* macro_assembler_;
     bool ignore_case_;
-    bool latin1_;
+    bool one_byte_;
     bool match_only_;
     bool unicode_;
     bool reg_exp_too_big_;
@@ -397,11 +397,11 @@ class RecursionCheck {
 // Attempts to compile the regexp using an Irregexp code generator.  Returns
 // a fixed array or a null handle depending on whether it succeeded.
 RegExpCompiler::RegExpCompiler(JSContext* cx, LifoAlloc* alloc, int capture_count,
-                               bool ignore_case, bool latin1, bool match_only, bool unicode)
+                               bool ignore_case, bool one_byte, bool match_only, bool unicode)
   : next_register_(2 * (capture_count + 1)),
     recursion_depth_(0),
     ignore_case_(ignore_case),
-    latin1_(latin1),
+    one_byte_(one_byte),
     match_only_(match_only),
     unicode_(unicode),
     reg_exp_too_big_(false),
@@ -881,7 +881,7 @@ static const size_t kEcma262UnCanonicalizeMaxWidth = 4;
 // that cannot occur in the source string because it is Latin1.
 static MOZ_ALWAYS_INLINE int
 GetCaseIndependentLetters(char16_t character,
-                          bool latin1_subject,
+                          bool one_byte_subject,
                           bool unicode,
                           const char16_t* choices,
                           size_t choices_length,
@@ -892,7 +892,7 @@ GetCaseIndependentLetters(char16_t character,
         char16_t c = choices[i];
 
         // Skip characters that can't appear in one byte strings.
-        if (!unicode && latin1_subject && c > kMaxOneByteCharCode)
+        if (!unicode && one_byte_subject && c > kMaxOneByteCharCode)
             continue;
 
         // Watch for duplicates.
@@ -914,7 +914,7 @@ GetCaseIndependentLetters(char16_t character,
 
 static int
 GetCaseIndependentLetters(char16_t character,
-                          bool latin1_subject,
+                          bool one_byte_subject,
                           bool unicode,
                           char16_t* letters)
 {
@@ -926,7 +926,7 @@ GetCaseIndependentLetters(char16_t character,
             unicode::ReverseFoldCase2(character),
             unicode::ReverseFoldCase3(character),
         };
-        return GetCaseIndependentLetters(character, latin1_subject, unicode,
+        return GetCaseIndependentLetters(character, one_byte_subject, unicode,
                                          choices, ArrayLength(choices), letters);
     }
 
@@ -946,7 +946,7 @@ GetCaseIndependentLetters(char16_t character,
         if (character > kMaxAsciiCharCode) {
             // If Canonicalize(character) == character, all other characters
             // should be ignored.
-            return GetCaseIndependentLetters(character, latin1_subject, unicode,
+            return GetCaseIndependentLetters(character, one_byte_subject, unicode,
                                              &character, 1, letters);
         }
 
@@ -965,7 +965,7 @@ GetCaseIndependentLetters(char16_t character,
         other2,
         other3
     };
-    return GetCaseIndependentLetters(character, latin1_subject, unicode,
+    return GetCaseIndependentLetters(character, one_byte_subject, unicode,
                                      choices, ArrayLength(choices), letters);
 }
 
@@ -1012,9 +1012,9 @@ EmitAtomSingle(RegExpCompiler* compiler,
                bool preloaded)
 {
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
-    bool latin1 = compiler->latin1();
+    bool one_byte = compiler->one_byte();
     char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-    int length = GetCaseIndependentLetters(c, latin1, compiler->unicode(), chars);
+    int length = GetCaseIndependentLetters(c, one_byte, compiler->unicode(), chars);
     if (length != 1)
         return false;
 
@@ -1028,9 +1028,9 @@ EmitAtomSingle(RegExpCompiler* compiler,
 }
 
 static bool ShortCutEmitCharacterPair(RegExpMacroAssembler* macro_assembler,
-                                      bool latin1, uc16 c1, uc16 c2,
+                                      bool one_byte, uc16 c1, uc16 c2,
                                       Label* on_failure) {
-    uc16 char_mask = MaximumCharacter(latin1);
+    uc16 char_mask = MaximumCharacter(one_byte);
 
     MOZ_ASSERT(c1 != c2);
     if (c1 > c2) {
@@ -1075,9 +1075,9 @@ EmitAtomMulti(RegExpCompiler* compiler,
               bool preloaded)
 {
     RegExpMacroAssembler* macro_assembler = compiler->macro_assembler();
-    bool latin1 = compiler->latin1();
+    bool one_byte = compiler->one_byte();
     char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-    int length = GetCaseIndependentLetters(c, latin1, compiler->unicode(), chars);
+    int length = GetCaseIndependentLetters(c, one_byte, compiler->unicode(), chars);
     if (length <= 1) return false;
     // We may not need to check against the end of the input string
     // if this character lies before a character that matched.
@@ -1088,7 +1088,7 @@ EmitAtomMulti(RegExpCompiler* compiler,
     DCHECK(kEcma262UnCanonicalizeMaxWidth == 4);
     switch (length) {
       case 2: {
-        if (ShortCutEmitCharacterPair(macro_assembler, latin1, chars[0],
+        if (ShortCutEmitCharacterPair(macro_assembler, one_byte, chars[0],
                                       chars[1], on_failure)) {
         } else {
             macro_assembler->CheckCharacter(chars[0], &ok);
@@ -1467,7 +1467,7 @@ static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector* ra
 
 static void EmitCharClass(LifoAlloc* alloc,
                           RegExpMacroAssembler* macro_assembler,
-                          RegExpCharacterClass* cc, bool latin1,
+                          RegExpCharacterClass* cc, bool one_byte,
                           Label* on_failure, int cp_offset, bool check_offset,
                           bool preloaded) {
     CharacterRangeVector* ranges = cc->ranges(alloc);
@@ -1475,7 +1475,7 @@ static void EmitCharClass(LifoAlloc* alloc,
         CharacterRange::Canonicalize(ranges);
     }
 
-    int max_char = MaximumCharacter(latin1);
+    int max_char = MaximumCharacter(one_byte);
     int range_count = ranges->length();
 
     int last_valid_range = range_count - 1;
@@ -1751,9 +1751,9 @@ static inline uint32_t SmearBitsRight(uint32_t v) {
     return v;
 }
 
-bool QuickCheckDetails::Rationalize(bool is_latin1) {
+bool QuickCheckDetails::Rationalize(bool asc) {
     bool found_useful_op = false;
-    uint32_t char_mask = MaximumCharacter(is_latin1);
+    uint32_t char_mask = MaximumCharacter(asc);
 
     mask_ = 0;
     value_ = 0;
@@ -1765,7 +1765,7 @@ bool QuickCheckDetails::Rationalize(bool is_latin1) {
         }
         mask_ |= (pos->mask & char_mask) << char_shift;
         value_ |= (pos->value & char_mask) << char_shift;
-        char_shift += is_latin1 ? 8 : 16;
+        char_shift += asc ? 8 : 16;
     }
     return found_useful_op;
 }
@@ -1780,7 +1780,7 @@ bool RegExpNode::EmitQuickCheck(RegExpCompiler* compiler,
     GetQuickCheckDetails(
                          details, compiler, 0, trace->at_start() == Trace::FALSE_VALUE);
     if (details->cannot_match()) return false;
-    if (!details->Rationalize(compiler->latin1())) return false;
+    if (!details->Rationalize(compiler->one_byte())) return false;
     DCHECK(details->characters() == 1 ||
            compiler->macro_assembler()->CanReadUnaligned());
     uint32_t mask = details->mask();
@@ -1800,7 +1800,7 @@ bool RegExpNode::EmitQuickCheck(RegExpCompiler* compiler,
     if (details->characters() == 1) {
         // If number of characters preloaded is 1 then we used a byte or 16 bit
         // load so the value is already masked down.
-        uint32_t char_mask = MaximumCharacter(compiler->latin1());
+        uint32_t char_mask = MaximumCharacter(compiler->one_byte());
         if ((mask & char_mask) == char_mask) need_mask = false;
         mask &= char_mask;
     } else {
@@ -1808,9 +1808,9 @@ bool RegExpNode::EmitQuickCheck(RegExpCompiler* compiler,
         // two-byte mode we also use a 16 bit load with zero extend.
         static const uint32_t kTwoByteMask = 0xffff;
         static const uint32_t kFourByteMask = 0xffffffff;
-        if (details->characters() == 2 && compiler->latin1()) {
+        if (details->characters() == 2 && compiler->one_byte()) {
             if ((mask & kTwoByteMask) == kTwoByteMask) need_mask = false;
-        } else if (details->characters() == 1 && !compiler->latin1()) {
+        } else if (details->characters() == 1 && !compiler->one_byte()) {
             if ((mask & kTwoByteMask) == kTwoByteMask) need_mask = false;
         } else {
             if (mask == kFourByteMask) need_mask = false;
@@ -1846,7 +1846,7 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                                     bool not_at_start) {
     DCHECK(characters_filled_in < details->characters());
     int characters = details->characters();
-    int char_mask = MaximumCharacter(compiler->latin1());
+    int char_mask = MaximumCharacter(compiler->one_byte());
 
     for (size_t k = 0; k < elements()->length(); k++) {
         TextElement elm = elements()->at(k);
@@ -1857,9 +1857,9 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                     details->positions(characters_filled_in);
                 uc16 c = quarks[i];
                 if (c > char_mask) {
-                    // If we expect a non-LATIN1 character from an LATIN1 string,
+                    // If we expect a non-Latin1 character from an Latin1 string,
                     // there is no way we can match. Not even case independent
-                    // matching can turn an LATIN1 character into non-LATIN1 or
+                    // matching can turn an Latin1 character into non-Latin1 or
                     // vice versa.
                     details->set_cannot_match();
                     pos->determines_perfectly = false;
@@ -1867,7 +1867,7 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                 }
                 if (compiler->ignore_case()) {
                     char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-                    size_t length = GetCaseIndependentLetters(c, compiler->latin1(),
+                    size_t length = GetCaseIndependentLetters(c, compiler->one_byte(),
                                                               compiler->unicode(), chars);
                     MOZ_ASSERT(length != 0);  // Can only happen if c > char_mask (see above).
                     if (length == 1) {
@@ -2056,7 +2056,7 @@ class VisitMarker {
     NodeInfo* info_;
 };
 
-RegExpNode* SeqRegExpNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) {
+RegExpNode* SeqRegExpNode::FilterOneByte(int depth, bool ignore_case, bool unicode) {
     if (info()->replacement_calculated) return replacement();
     if (depth < 0) return this;
     DCHECK(!info()->visited);
@@ -2065,7 +2065,7 @@ RegExpNode* SeqRegExpNode::FilterLATIN1(int depth, bool ignore_case, bool unicod
 }
 
 RegExpNode* SeqRegExpNode::FilterSuccessor(int depth, bool ignore_case, bool unicode) {
-    RegExpNode* next = on_success_->FilterLATIN1(depth - 1, ignore_case, unicode);
+    RegExpNode* next = on_success_->FilterOneByte(depth - 1, ignore_case, unicode);
     if (next == nullptr) return set_replacement(nullptr);
     on_success_ = next;
     return set_replacement(this);
@@ -2079,7 +2079,7 @@ static bool RangesContainLatin1Equivalents(CharacterRangeVector* ranges, bool un
     return false;
 }
 
-RegExpNode* TextNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) {
+RegExpNode* TextNode::FilterOneByte(int depth, bool ignore_case, bool unicode) {
     if (info()->replacement_calculated) return replacement();
     if (depth < 0) return this;
     DCHECK(!info()->visited);
@@ -2132,7 +2132,7 @@ RegExpNode* TextNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) {
     return FilterSuccessor(depth - 1, ignore_case, unicode);
 }
 
-RegExpNode* LoopChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) {
+RegExpNode* LoopChoiceNode::FilterOneByte(int depth, bool ignore_case, bool unicode) {
     if (info()->replacement_calculated) return replacement();
     if (depth < 0) return this;
     if (info()->visited) return this;
@@ -2140,17 +2140,17 @@ RegExpNode* LoopChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unico
         VisitMarker marker(info());
 
         RegExpNode* continue_replacement =
-            continue_node_->FilterLATIN1(depth - 1, ignore_case, unicode);
+            continue_node_->FilterOneByte(depth - 1, ignore_case, unicode);
 
         // If we can't continue after the loop then there is no sense in doing the
         // loop.
         if (continue_replacement == nullptr) return set_replacement(nullptr);
     }
 
-    return ChoiceNode::FilterLATIN1(depth - 1, ignore_case, unicode);
+    return ChoiceNode::FilterOneByte(depth - 1, ignore_case, unicode);
 }
 
-RegExpNode* ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) {
+RegExpNode* ChoiceNode::FilterOneByte(int depth, bool ignore_case, bool unicode) {
     if (info()->replacement_calculated) return replacement();
     if (depth < 0) return this;
     if (info()->visited) return this;
@@ -2170,7 +2170,7 @@ RegExpNode* ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) 
     for (int i = 0; i < choice_count; i++) {
         GuardedAlternative alternative = alternatives()->at(i);
         RegExpNode* replacement =
-            alternative.node()->FilterLATIN1(depth - 1, ignore_case, unicode);
+            alternative.node()->FilterOneByte(depth - 1, ignore_case, unicode);
         DCHECK(replacement != this);  // No missing EMPTY_MATCH_CHECK.
         if (replacement != nullptr) {
             alternatives()->at(i).set_node(replacement);
@@ -2190,7 +2190,7 @@ RegExpNode* ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) 
     new_alternatives.reserve(surviving);
     for (int i = 0; i < choice_count; i++) {
         RegExpNode* replacement =
-            alternatives()->at(i).node()->FilterLATIN1(depth - 1, ignore_case, unicode);
+            alternatives()->at(i).node()->FilterOneByte(depth - 1, ignore_case, unicode);
         if (replacement != nullptr) {
             alternatives()->at(i).set_node(replacement);
             new_alternatives.append(alternatives()->at(i));
@@ -2200,8 +2200,8 @@ RegExpNode* ChoiceNode::FilterLATIN1(int depth, bool ignore_case, bool unicode) 
     return this;
 }
 
-RegExpNode* NegativeLookaheadChoiceNode::FilterLATIN1(int depth,
-                                                      bool ignore_case, bool unicode) {
+RegExpNode* NegativeLookaheadChoiceNode::FilterOneByte(int depth,
+                                                       bool ignore_case, bool unicode) {
     if (info()->replacement_calculated) return replacement();
     if (depth < 0) return this;
     if (info()->visited) return this;
@@ -2209,12 +2209,12 @@ RegExpNode* NegativeLookaheadChoiceNode::FilterLATIN1(int depth,
     // Alternative 0 is the negative lookahead, alternative 1 is what comes
     // afterwards.
     RegExpNode* node = alternatives()->at(1).node();
-    RegExpNode* replacement = node->FilterLATIN1(depth - 1, ignore_case, unicode);
+    RegExpNode* replacement = node->FilterOneByte(depth - 1, ignore_case, unicode);
     if (replacement == nullptr) return set_replacement(nullptr);
     alternatives()->at(1).set_node(replacement);
 
     RegExpNode* neg_node = alternatives()->at(0).node();
-    RegExpNode* neg_replacement = neg_node->FilterLATIN1(depth - 1, ignore_case, unicode);
+    RegExpNode* neg_replacement = neg_node->FilterOneByte(depth - 1, ignore_case, unicode);
     // If the negative lookahead is always going to fail then
     // we don't need to check it.
     if (neg_replacement == nullptr) return set_replacement(replacement);
@@ -2330,7 +2330,7 @@ static void EmitHat(RegExpCompiler* compiler,
     if (!assembler->CheckSpecialCharacterClass('n',
                                                new_trace.backtrack())) {
         // Newline means \n, \r, 0x2028 or 0x2029.
-        if (!compiler->latin1()) {
+        if (!compiler->one_byte()) {
             assembler->CheckCharacterAfterAnd(0x2028, 0xfffe, &ok);
         }
         assembler->CheckCharacter('\n', &ok);
@@ -2395,9 +2395,10 @@ void AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler, Trace* trace) {
     }
 }
 
-void AssertionNode::BacktrackIfPrevious(RegExpCompiler* compiler,
-                                        Trace* trace,
-                                        AssertionNode::IfPrevious backtrack_if_previous) {
+void AssertionNode::BacktrackIfPrevious(
+        RegExpCompiler* compiler,
+        Trace* trace,
+        AssertionNode::IfPrevious backtrack_if_previous) {
     RegExpMacroAssembler* assembler = compiler->macro_assembler();
     Trace new_trace(*trace);
     new_trace.InvalidateCurrentCharacter();
@@ -2603,7 +2604,7 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
                             bool first_element_checked,
                             int* checked_up_to) {
     RegExpMacroAssembler* assembler = compiler->macro_assembler();
-    bool latin1 = compiler->latin1();
+    bool one_byte = compiler->one_byte();
     Label* backtrack = trace->backtrack();
     QuickCheckDetails* quick_check = trace->quick_check_performed();
     int element_count = elements()->length();
@@ -2618,7 +2619,7 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
                 EmitCharacterFunction* emit_function = nullptr;
                 switch (pass) {
                   case NON_LATIN1_MATCH:
-                    DCHECK(latin1);
+                    DCHECK(one_byte);
                     if (!IsLatin1Equivalent(quarks[j], compiler)) {
                         assembler->JumpOrBacktrack(backtrack);
                         return;
@@ -2654,7 +2655,7 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
                 if (DeterminedAlready(quick_check, elm.cp_offset())) continue;
                 RegExpCharacterClass* cc = elm.char_class();
                 bool bounds_check = *checked_up_to < cp_offset;
-                EmitCharClass(alloc(), assembler, cc, latin1, backtrack, cp_offset,
+                EmitCharClass(alloc(), assembler, cc, one_byte, backtrack, cp_offset,
                               bounds_check, preloaded);
                 UpdateBoundsCheck(cp_offset, checked_up_to);
             }
@@ -2693,7 +2694,7 @@ void TextNode::Emit(RegExpCompiler* compiler, Trace* trace) {
         return;
     }
 
-    if (compiler->latin1()) {
+    if (compiler->one_byte()) {
         int dummy = 0;
         TextEmitPass(compiler, NON_LATIN1_MATCH, false, trace, false, &dummy);
     }
@@ -2761,7 +2762,7 @@ void Trace::AdvanceCurrentPositionInTrace(int by, RegExpCompiler* compiler) {
 static bool
 CompareInverseRanges(const CharacterRangeVector* ranges, const int* special_class, size_t length);
 
-void TextNode::MakeCaseIndependent(bool is_latin1, bool unicode) {
+void TextNode::MakeCaseIndependent(bool is_one_byte, bool unicode) {
     int element_count = elements()->length();
     for (int i = 0; i < element_count; i++) {
         TextElement elm = elements()->at(i);
@@ -2785,7 +2786,7 @@ void TextNode::MakeCaseIndependent(bool is_latin1, bool unicode) {
 
             int range_count = ranges->length();
             for (int j = 0; j < range_count; j++)
-                ranges->at(j).AddCaseEquivalents(is_latin1, unicode, ranges);
+                ranges->at(j).AddCaseEquivalents(is_one_byte, unicode, ranges);
         }
     }
 }
@@ -2805,7 +2806,7 @@ RegExpNode* TextNode::GetSuccessorOfOmnivorousTextNode(
         return ranges->length() == 0 ? on_success() : nullptr;
     }
     if (ranges->length() != 1) return nullptr;
-    uint32_t max_char = MaximumCharacter(compiler->latin1());
+    uint32_t max_char = MaximumCharacter(compiler->one_byte());
     return ranges->at(0).IsEverything(max_char) ? on_success() : nullptr;
 }
 
@@ -2871,8 +2872,8 @@ void LoopChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
 int ChoiceNode::CalculatePreloadCharacters(RegExpCompiler* compiler, int eats_at_least) {
     int preload_characters = Min(4, eats_at_least);
     if (compiler->macro_assembler()->CanReadUnaligned()) {
-        bool latin1 = compiler->latin1();
-        if (latin1) {
+        bool one_byte = compiler->one_byte();
+        if (one_byte) {
             if (preload_characters > 4) preload_characters = 4;
             // We can't preload 3 characters because there is no machine instruction
             // to do that.  We can't just load 4 because we could be reading
@@ -2983,7 +2984,7 @@ BoyerMooreLookahead::BoyerMooreLookahead(
       compiler_(compiler),
       bitmaps_(*alloc) {
     bool unicode_ignore_case = compiler->unicode() && compiler->ignore_case();
-    max_char_ = MaximumCharacter(compiler->latin1());
+    max_char_ = MaximumCharacter(compiler->one_byte());
 
     bitmaps_.reserve(length);
     for (size_t i = 0; i < length; i++) {
@@ -3048,7 +3049,7 @@ int BoyerMooreLookahead::FindBestInterval(
         // skipping in quickcheck is more likely to do well on this case.
         bool in_quickcheck_range =
             ((i - remembered_from < 4) ||
-             (compiler_->latin1() ? remembered_from <= 4 : remembered_from <= 2));
+             (compiler_->one_byte() ? remembered_from <= 4 : remembered_from <= 2));
         // Called 'probability' but it is only a rough estimate and can actually
         // be outside the 0-kSize range.
         int probability = (in_quickcheck_range ? kSize / 2 : kSize) - frequency;
@@ -3350,7 +3351,7 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     if (eats_at_least == kEatsAtLeastNotYetInitialized) {
         // Save some time by looking at most one machine word ahead.
         eats_at_least =
-            EatsAtLeast(compiler->latin1() ? 4 : 2, kRecursionBudget, not_at_start);
+            EatsAtLeast(compiler->one_byte() ? 4 : 2, kRecursionBudget, not_at_start);
     }
     int preload_characters = CalculatePreloadCharacters(compiler, eats_at_least);
 
@@ -4223,12 +4224,12 @@ void CharacterRange::AddClassEscapeUnicode(LifoAlloc* alloc,
 }
 
 void
-CharacterRange::AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeVector* ranges)
+CharacterRange::AddCaseEquivalents(bool is_one_byte, bool unicode, CharacterRangeVector* ranges)
 {
     char16_t bottom = from();
     char16_t top = to();
 
-    if (is_latin1 && !RangeContainsLatin1Equivalents(*this, unicode)) {
+    if (is_one_byte && !RangeContainsLatin1Equivalents(*this, unicode)) {
         if (bottom > kMaxOneByteCharCode)
             return;
         if (top > kMaxOneByteCharCode)
@@ -4241,7 +4242,7 @@ CharacterRange::AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeV
 
     for (char16_t c = bottom;; c++) {
         char16_t chars[kEcma262UnCanonicalizeMaxWidth];
-        size_t length = GetCaseIndependentLetters(c, is_latin1, unicode, chars);
+        size_t length = GetCaseIndependentLetters(c, is_one_byte, unicode, chars);
 
         for (size_t i = 0; i < length; i++) {
             char16_t other = chars[i];
@@ -4435,7 +4436,7 @@ bool OutSet::Get(unsigned value) const {
 
 void Analysis::EnsureAnalyzed(RegExpNode* that) {
     if (!CheckRecursionLimit(cx)) {
-        failASCII("Stack overflow");
+        fail("Stack overflow");
         return;
     }
 
@@ -4465,7 +4466,7 @@ void TextNode::CalculateOffsets() {
 
 void Analysis::VisitText(TextNode* that) {
     if (ignore_case_) {
-        that->MakeCaseIndependent(is_latin1_, unicode_);
+        that->MakeCaseIndependent(is_one_byte_, unicode_);
     }
     EnsureAnalyzed(that->on_success());
     if (!has_failed()) {
@@ -4696,7 +4697,7 @@ IsNativeRegExpEnabled(JSContext* cx)
 RegExpCode
 irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompileData* data,
                          HandleLinearString sample, bool is_global, bool ignore_case,
-                         bool is_latin1, bool match_only, bool force_bytecode, bool sticky,
+                         bool is_one_byte, bool match_only, bool force_bytecode, bool sticky,
                          bool unicode, RegExpShared::JitCodeTables& tables)
 {
     if ((data->capture_count + 1) * 2 - 1 > RegExpMacroAssembler::kMaxRegister) {
@@ -4705,8 +4706,8 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
     }
 
     LifoAlloc& alloc = cx->tempLifoAlloc();
-    RegExpCompiler compiler(cx, &alloc, data->capture_count, ignore_case, is_latin1, match_only,
-                            unicode);
+    RegExpCompiler compiler(cx, &alloc, data->capture_count, ignore_case,
+                            is_one_byte, match_only, unicode);
 
     // Sample some characters from the middle of the string.
     if (sample->hasLatin1Chars()) {
@@ -4758,22 +4759,22 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
         return RegExpCode();
     }
 
-    if (is_latin1) {
-        node = node->FilterLATIN1(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
+    if (is_one_byte) {
+        node = node->FilterOneByte(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
         // Do it again to propagate the new nodes to places where they were not
         // put because they had not been calculated yet.
         if (node != nullptr) {
-            node = node->FilterLATIN1(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
+            node = node->FilterOneByte(RegExpCompiler::kMaxRecursion, ignore_case, unicode);
         }
     }
 
     if (node == nullptr)
         node = alloc.newInfallible<EndNode>(&alloc, EndNode::BACKTRACK);
 
-    Analysis analysis(cx, ignore_case, is_latin1, unicode);
+    Analysis analysis(cx, ignore_case, is_one_byte, unicode);
     analysis.EnsureAnalyzed(node);
     if (analysis.has_failed()) {
-        JS_ReportErrorASCII(cx, "%s", analysis.errorMessage());
+        JS_ReportErrorASCII(cx, "%s", analysis.error_message());
         return RegExpCode();
     }
 
@@ -4793,8 +4794,8 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
         shared->getSource()->length() < 32 * 1024)
     {
         NativeRegExpMacroAssembler::Mode mode =
-            is_latin1 ? NativeRegExpMacroAssembler::LATIN1
-                      : NativeRegExpMacroAssembler::CHAR16;
+            is_one_byte ? NativeRegExpMacroAssembler::LATIN1
+                        : NativeRegExpMacroAssembler::CHAR16;
 
         ctx.emplace(cx, (jit::TempAllocator*) nullptr);
         native_assembler.emplace(cx, &alloc, mode, (data->capture_count + 1) * 2, tables);
