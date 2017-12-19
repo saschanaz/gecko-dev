@@ -37,6 +37,10 @@
 #include "irregexp/RegExpMacroAssembler.h"
 #include "jit/ExecutableAllocator.h"
 #include "jit/JitCommon.h"
+#if ENABLE_INTL_API
+#include "unicode/uniset.h"
+#include "unicode/utypes.h"
+#endif
 
 #include "irregexp/RegExpCharacters-inl.h"
 
@@ -945,6 +949,7 @@ GetCaseIndependentLetters(bool one_byte_subject,
         if (found)
             continue;
 
+        MOZ_ASSERT(count < unibrow::Ecma262UnCanonicalize::kMaxWidth);
         letters[count++] = c;
     }
 
@@ -996,25 +1001,21 @@ static int GetCaseIndependentLetters(uc16 character,
                                      choices, ArrayLength(choices), letters);
 }
 
+#ifndef ENABLE_INTL_API
 static int
-GetCaseIndependentLetters(uc16 character,
-                          bool one_byte_subject,
-                          bool unicode,
-                          unibrow::uchar* letters)
+GetCaseIndependentLettersUnicode(uc16 character,
+                                 unibrow::uchar* letters)
 {
-    if (unicode) {
-        const uc16 choices[] = {
-            character,
-            unicode::FoldCase(character),
-            unicode::ReverseFoldCase1(character),
-            unicode::ReverseFoldCase2(character),
-            unicode::ReverseFoldCase3(character),
-        };
-        return GetCaseIndependentLetters(false, choices, ArrayLength(choices), letters);
-    }
-
-    return GetCaseIndependentLetters(character, one_byte_subject, letters);
+    const uc16 choices[] = {
+        character,
+        unicode::FoldCase(character),
+        unicode::ReverseFoldCase1(character),
+        unicode::ReverseFoldCase2(character),
+        unicode::ReverseFoldCase3(character),
+    };
+    return GetCaseIndependentLetters(false, choices, ArrayLength(choices), letters);
 }
+#endif
 
 typedef bool EmitCharacterFunction(RegExpCompiler* compiler,
                                    uc16 c,
@@ -4120,8 +4121,23 @@ RegExpNode* UnanchoredAdvance(RegExpCompiler* compiler,
 
 static void AddUnicodeCaseEquivalents(CharacterRangeVector* ranges, irregexp::Zone* zone) {
     // TODO(anba): Use ICU to compute the case fold closure over the ranges.
-
-    auto AppendToRanges = [ranges](char16_t ch) {
+#ifdef ENABLE_INTL_API
+    // Use ICU to compute the case fold closure over the ranges.
+    icu::UnicodeSet set;
+    for (int i = 0; i < ranges->length(); i++) {
+        set.add(ranges->at(i).from(), ranges->at(i).to());
+    }
+    ranges->clear();
+    set.closeOver(USET_CASE_INSENSITIVE);
+    // Full case mapping map single characters to multiple characters.
+    // Those are represented as strings in the set. Remove them so that
+    // we end up with only simple and common case mappings.
+    set.removeAllStrings();
+    for (int i = 0; i < set.getRangeCount(); i++) {
+        ranges->append(CharacterRange::Range(set.getRangeStart(i), set.getRangeEnd(i)));
+    }
+#else
+    auto AppendToRanges = [ranges](uc32 ch) {
         // Try to combine with an existing range.
         for (int i = 0; i < ranges->length(); i++) {
             CharacterRange& range = ranges->at(i);
@@ -4155,7 +4171,7 @@ static void AddUnicodeCaseEquivalents(CharacterRangeVector* ranges, irregexp::Zo
                     AppendToRanges(unicode::UTF16Decode(lead, caseFoldedTrail));
             } else {
                 char16_t chars[unibrow::Ecma262UnCanonicalize::kMaxWidth];
-                int length = GetCaseIndependentLetters(c, false, true, chars);
+                int length = GetCaseIndependentLettersUnicode(c, chars);
 
                 for (int i = 0; i < length; i++) {
                     char16_t other = chars[i];
@@ -4165,6 +4181,7 @@ static void AddUnicodeCaseEquivalents(CharacterRangeVector* ranges, irregexp::Zo
             }
         }
     }
+#endif // ENABLE_INTL_API
 
     CharacterRange::Canonicalize(ranges);
 }

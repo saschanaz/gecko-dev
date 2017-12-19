@@ -1409,7 +1409,7 @@ bool RegExpBuilder::NeedsDesugaringForUnicode(RegExpCharacterClass* cc) {
 
 
 bool RegExpBuilder::NeedsDesugaringForIgnoreCase(uc32 c) {
-    // TODO(anba): Use ICU
+    // TODO(anba): Also use ICU here?
     if (unicode() && ignore_case()) {
         return unicode::HasCaseFold(static_cast<uint32_t>(c));
     }
