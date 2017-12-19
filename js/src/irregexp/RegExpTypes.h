@@ -72,6 +72,8 @@ namespace unibrow { namespace Ecma262UnCanonicalize {
    constexpr size_t kMaxWidth = 4;
 } }
 
+using Zone = LifoAlloc;
+
 // InfallibleVector is like Vector, but all its methods are infallible (they
 // crash on OOM). We use this class instead of Vector to avoid a ton of
 // MOZ_MUST_USE warnings in irregexp code (imported from V8).

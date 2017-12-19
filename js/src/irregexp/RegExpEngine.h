@@ -56,11 +56,11 @@ class RegExpTree;
 class BoyerMooreLookahead;
 
 // A set of unsigned integers that behaves especially well on small
-// integers (< 32).
+// integers (< 32).  May do zone-allocation.
 class OutSet {
   public:
     OutSet() : first_(0), remaining_(nullptr), successors_(nullptr) {}
-    OutSet* Extend(LifoAlloc* alloc, unsigned value);
+    OutSet* Extend(unsigned value, Zone* zone);
     bool Get(unsigned value) const;
     static const unsigned kFirstLimit = 32;
 
@@ -71,12 +71,12 @@ class OutSet {
     // Destructively set a value in this set.  In most cases you want
     // to use Extend instead to ensure that only one instance exists
     // that contains the same values.
-    void Set(LifoAlloc* alloc, unsigned value);
+    void Set(unsigned value, Zone* zone);
 
     // The successors are a list of sets that contain the same values
     // as this set and the one more value that is not present in this
     // set.
-    OutSetVector* successors() { return successors_; }
+    OutSetVector* successors(Zone* zone) { return successors_; }
 
     OutSet(uint32_t first, RemainingVector* remaining)
       : first_(first), remaining_(remaining), successors_(nullptr) {}
@@ -230,8 +230,8 @@ class QuickCheckDetails {
 
 class RegExpNode {
   public:
-    explicit RegExpNode(LifoAlloc* alloc)
-      : replacement_(nullptr), trace_count_(0), alloc_(alloc) {
+    explicit RegExpNode(Zone* zone)
+      : replacement_(nullptr), trace_count_(0), zone_(zone) {
       bm_info_[0] = bm_info_[1] = nullptr;
     }
     virtual ~RegExpNode() {}
@@ -331,7 +331,7 @@ class RegExpNode {
         return bm_info_[not_at_start ? 1 : 0];
     }
 
-    LifoAlloc* alloc() const { return alloc_; }
+    Zone* zone() const { return zone_; }
 
   protected:
     enum LimitResult { DONE, CONTINUE };
@@ -356,13 +356,13 @@ class RegExpNode {
     int trace_count_;
     BoyerMooreLookahead* bm_info_[2];
 
-    LifoAlloc* alloc_;
+    Zone* zone_;
 };
 
 class SeqRegExpNode : public RegExpNode {
   public:
     explicit SeqRegExpNode(RegExpNode* on_success)
-      : RegExpNode(on_success->alloc()), on_success_(on_success) {}
+      : RegExpNode(on_success->zone()), on_success_(on_success) {}
 
     RegExpNode* on_success() { return on_success_; }
     void set_on_success(RegExpNode* node) { on_success_ = node; }
@@ -470,7 +470,7 @@ class TextNode : public SeqRegExpNode {
     TextNode(RegExpCharacterClass* that,
              RegExpNode* on_success)
       : SeqRegExpNode(on_success),
-        elms_(alloc()->newInfallible<TextElementVector>(*alloc())) {
+        elms_(zone()->newInfallible<TextElementVector>(*zone())) {
         elms_->append(TextElement::CharClass(that));
     }
 
@@ -529,27 +529,27 @@ class AssertionNode : public SeqRegExpNode {
     {}
 
     static AssertionNode* AtEnd(RegExpNode* on_success) {
-        return on_success->alloc()->newInfallible<AssertionNode>(AT_END, on_success);
+        return on_success->zone()->newInfallible<AssertionNode>(AT_END, on_success);
     }
     static AssertionNode* AtStart(RegExpNode* on_success) {
-        return on_success->alloc()->newInfallible<AssertionNode>(AT_START, on_success);
+        return on_success->zone()->newInfallible<AssertionNode>(AT_START, on_success);
     }
     static AssertionNode* AtBoundary(RegExpNode* on_success) {
-        return on_success->alloc()->newInfallible<AssertionNode>(AT_BOUNDARY, on_success);
+        return on_success->zone()->newInfallible<AssertionNode>(AT_BOUNDARY, on_success);
     }
     static AssertionNode* AtNonBoundary(RegExpNode* on_success) {
-        return on_success->alloc()->newInfallible<AssertionNode>(AT_NON_BOUNDARY, on_success);
+        return on_success->zone()->newInfallible<AssertionNode>(AT_NON_BOUNDARY, on_success);
     }
     static AssertionNode* AfterNewline(RegExpNode* on_success) {
-        return on_success->alloc()->newInfallible<AssertionNode>(AFTER_NEWLINE, on_success);
+        return on_success->zone()->newInfallible<AssertionNode>(AFTER_NEWLINE, on_success);
     }
     static AssertionNode* NotAfterLeadSurrogate(RegExpNode* on_success) {
-        return on_success->alloc()->newInfallible<AssertionNode>(NOT_AFTER_LEAD_SURROGATE,
-                                                                 on_success);
+        return on_success->zone()->newInfallible<AssertionNode>(NOT_AFTER_LEAD_SURROGATE,
+                                                                on_success);
     }
     static AssertionNode* NotInSurrogatePair(RegExpNode* on_success) {
-        return on_success->alloc()->newInfallible<AssertionNode>(NOT_IN_SURROGATE_PAIR,
-                                                                 on_success);
+        return on_success->zone()->newInfallible<AssertionNode>(NOT_IN_SURROGATE_PAIR,
+                                                                on_success);
     }
     virtual void Accept(NodeVisitor* visitor);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
@@ -604,7 +604,7 @@ class EndNode : public RegExpNode {
   public:
     enum Action { ACCEPT, BACKTRACK, NEGATIVE_SUBMATCH_SUCCESS };
 
-    EndNode(LifoAlloc* alloc, Action action) : RegExpNode(alloc), action_(action) {}
+    EndNode(Action action, Zone* zone) : RegExpNode(zone), action_(action) {}
 
     virtual void Accept(NodeVisitor* visitor);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
@@ -630,12 +630,12 @@ class EndNode : public RegExpNode {
 
 class NegativeSubmatchSuccess : public EndNode {
   public:
-    NegativeSubmatchSuccess(LifoAlloc* alloc,
-                            int stack_pointer_reg,
+    NegativeSubmatchSuccess(int stack_pointer_reg,
                             int position_reg,
                             int clear_capture_count,
-                            int clear_capture_start)
-      : EndNode(alloc, NEGATIVE_SUBMATCH_SUCCESS),
+                            int clear_capture_start,
+                            Zone* zone)
+      : EndNode(NEGATIVE_SUBMATCH_SUCCESS, zone),
         stack_pointer_register_(stack_pointer_reg),
         current_position_register_(position_reg),
         clear_capture_count_(clear_capture_count),
@@ -673,7 +673,7 @@ typedef InfallibleVector<Guard*, 1> GuardVector;
 class GuardedAlternative {
   public:
     explicit GuardedAlternative(RegExpNode* node) : node_(node), guards_(nullptr) { }
-    void AddGuard(LifoAlloc* alloc, Guard* guard);
+    void AddGuard(Guard* guard, Zone* zone);
     RegExpNode* node() { return node_; }
     void set_node(RegExpNode* node) { node_ = node; }
     GuardVector* guards() { return guards_; }
@@ -689,9 +689,9 @@ class AlternativeGeneration;
 
 class ChoiceNode : public RegExpNode {
   public:
-    explicit ChoiceNode(LifoAlloc* alloc, int expected_size)
-      : RegExpNode(alloc),
-        alternatives_(*alloc),
+    explicit ChoiceNode(int expected_size, Zone* zone)
+      : RegExpNode(zone),
+        alternatives_(*zone),
         not_at_start_(false),
         being_calculated_(false) {
         alternatives_.reserve(expected_size);
@@ -748,10 +748,10 @@ class ChoiceNode : public RegExpNode {
 
 class NegativeLookaroundChoiceNode : public ChoiceNode {
   public:
-    explicit NegativeLookaroundChoiceNode(LifoAlloc* alloc,
-                                          GuardedAlternative this_must_fail,
-                                          GuardedAlternative then_do_this)
-      : ChoiceNode(alloc, 2) {
+    explicit NegativeLookaroundChoiceNode(GuardedAlternative this_must_fail,
+                                          GuardedAlternative then_do_this,
+                                          Zone* zone)
+      : ChoiceNode(2, zone) {
         AddAlternative(this_must_fail);
         AddAlternative(then_do_this);
     }
@@ -776,8 +776,8 @@ class NegativeLookaroundChoiceNode : public ChoiceNode {
 
 class LoopChoiceNode : public ChoiceNode {
   public:
-    LoopChoiceNode(LifoAlloc* alloc, bool body_can_be_zero_length)
-      : ChoiceNode(alloc, 2),
+    LoopChoiceNode(bool body_can_be_zero_length, Zone* zone)
+      : ChoiceNode(2, zone),
         loop_node_(nullptr),
         continue_node_(nullptr),
         body_can_be_zero_length_(body_can_be_zero_length) {}
@@ -854,8 +854,8 @@ ContainedInLattice AddRange(ContainedInLattice a,
 
 class BoyerMoorePositionInfo {
   public:
-    explicit BoyerMoorePositionInfo(LifoAlloc* alloc, bool unicode_ignore_case)
-      : map_(*alloc),
+    explicit BoyerMoorePositionInfo(bool unicode_ignore_case, Zone* zone)
+      : map_(*zone),
         map_count_(0),
         w_(kNotYet),
         s_(kNotYet),
@@ -896,7 +896,7 @@ typedef InfallibleVector<BoyerMoorePositionInfo*, 1> BoyerMoorePositionInfoVecto
 
 class BoyerMooreLookahead {
   public:
-    BoyerMooreLookahead(LifoAlloc* alloc, size_t length, RegExpCompiler* compiler);
+    BoyerMooreLookahead(size_t length, RegExpCompiler* compiler, Zone* zone);
 
     int length() { return length_; }
     int max_char() { return max_char_; }
@@ -1109,13 +1109,13 @@ class Trace {
     void AdvanceCurrentPositionInTrace(int by, RegExpCompiler* compiler);
 
   private:
-    int FindAffectedRegisters(LifoAlloc* alloc, OutSet* affected_registers);
-    void PerformDeferredActions(LifoAlloc* alloc,
-                                RegExpMacroAssembler* macro,
+    int FindAffectedRegisters(OutSet* affected_registers, Zone* zone);
+    void PerformDeferredActions(RegExpMacroAssembler* macro,
                                 int max_register,
                                 const OutSet& affected_registers,
                                 OutSet* registers_to_pop,
-                                OutSet* registers_to_clear);
+                                OutSet* registers_to_clear,
+                                Zone* zone);
     void RestoreAffectedRegisters(RegExpMacroAssembler* macro,
                                   int max_register,
                                   const OutSet& registers_to_pop,

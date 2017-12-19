@@ -118,11 +118,12 @@ class CharacterRange {
 
     CharacterRange(uc32 from, uc32 to) : from_(from), to_(to) {}
 
-    static void AddClassEscape(LifoAlloc* alloc, char16_t type, CharacterRangeVector* ranges);
+    static void AddClassEscape(char16_t type, CharacterRangeVector* ranges,
+                               Zone* zone);
 
     // Add class escapes. Add case equivalent closure for \w and \W if necessary.
-    static void AddClassEscape(LifoAlloc* alloc, char16_t type, CharacterRangeVector* ranges,
-                               bool add_unicode_case_equivalents);
+    static void AddClassEscape(char16_t type, CharacterRangeVector* ranges,
+                               bool add_unicode_case_equivalents, Zone* zone);
 
     static inline CharacterRange Singleton(uc32 value) {
         return CharacterRange(value, value);
@@ -136,9 +137,9 @@ class CharacterRange {
     static inline CharacterRange Everything() {
         return CharacterRange(0, String::kMaxCodePoint);
     }
-    static inline CharacterRangeVector* List(LifoAlloc* alloc,
+    static inline CharacterRangeVector* List(Zone* zone,
                                              CharacterRange range) {
-        CharacterRangeVector* list = alloc->newInfallible<CharacterRangeVector>(*alloc);
+        CharacterRangeVector* list = zone->newInfallible<CharacterRangeVector>(*zone);
         list->append(range);
         return list;
     }
@@ -152,7 +153,7 @@ class CharacterRange {
     bool IsEverything(uc16 max) { return from_ == 0 && to_ >= max; }
     bool IsSingleton() { return (from_ == to_); }
 
-    static void AddCaseEquivalents(LifoAlloc* alloc,
+    static void AddCaseEquivalents(Zone* zone,
                                    CharacterRangeVector* ranges,
                                    bool is_one_byte);
     void AddCaseEquivalents(bool is_one_byte, bool unicode, CharacterRangeVector* ranges);
@@ -168,17 +169,16 @@ class CharacterRange {
     static void Canonicalize(CharacterRangeVector* ranges);
 
     // Negate the contents of a character range in canonical form.
-    static void Negate(LifoAlloc* alloc,
-                       CharacterRangeVector src,
-                       CharacterRangeVector* dst);
+    static void Negate(CharacterRangeVector src,
+                       CharacterRangeVector* dst, Zone* zone);
 
     static const int kStartMarker = (1 << 24);
     static const int kPayloadMask = (1 << 24) - 1;
 
-    static void AddClassEscapeUnicode(LifoAlloc* alloc, char16_t type,
-                                      CharacterRangeVector* ranges, bool ignoreCase);
+    static void AddClassEscapeUnicode(char16_t type, CharacterRangeVector* ranges,
+                                      bool ignoreCase, Zone* zone);
 
-    static void Split(const LifoAlloc* alloc,
+    static void Split(const Zone* zone,
                       CharacterRangeVector base,
                       const Vector<int>& overlay,
                       CharacterRangeVector* included,
@@ -196,7 +196,7 @@ class CharacterSet final {
     explicit CharacterSet(CharacterRangeVector* ranges)
         : ranges_(ranges), standard_set_type_(0) {}
 
-    CharacterRangeVector* ranges(LifoAlloc* alloc);
+    CharacterRangeVector* ranges(Zone* zone);
     uc16 standard_set_type() { return standard_set_type_; }
     void set_standard_set_type(uc16 special_set_type) {
         standard_set_type_ = special_set_type;
@@ -263,7 +263,7 @@ class RegExpTree {
     // Returns the interval of registers used for captures within this
     // expression.
     virtual Interval CaptureRegisters() { return Interval::Empty(); }
-    virtual void AppendToText(RegExpText* text);
+    virtual void AppendToText(RegExpText* text, Zone* zone);
 #define MAKE_ASTYPE(Name)                                               \
     virtual RegExp##Name* As##Name();                                   \
     virtual bool Is##Name();
@@ -373,13 +373,13 @@ class RegExpCharacterClass final : public RegExpTree {
     //                make max_match() dependent on the character class content.
     // FIXME(anba): Change to |return 2| per upstream.
     int max_match() override { return 1; }
-    void AppendToText(RegExpText* text) override;
+    void AppendToText(RegExpText* text, Zone* zone) override;
 
     CharacterSet character_set() { return set_; }
 
     // TODO(lrn): Remove need for complex version if is_standard that
     // recognizes a mangled standard set and just do { return set_.is_special(); }
-    bool is_standard(LifoAlloc* alloc);
+    bool is_standard(Zone* zone);
 
     // Returns a value representing the standard character set if is_standard()
     // returns true.
@@ -393,7 +393,7 @@ class RegExpCharacterClass final : public RegExpTree {
     // . : non-unicode non-newline
     // * : All characters
     uc16 standard_type() { return set_.standard_set_type(); }
-    CharacterRangeVector* ranges(LifoAlloc* alloc) { return set_.ranges(alloc); }
+    CharacterRangeVector* ranges(Zone* zone) { return set_.ranges(zone); }
     bool is_negated() const { return flags_.contains(NEGATED); }
 
   private:
@@ -414,7 +414,7 @@ class RegExpAtom final : public RegExpTree {
     bool IsTextElement() override { return true; }
     int min_match() override { return data_->length(); }
     int max_match() override { return data_->length(); }
-    void AppendToText(RegExpText* text) override;
+    void AppendToText(RegExpText* text, Zone* zone) override;
 
     CharacterVector& data() { return *data_; }
     int length() { return data_->length(); }
@@ -425,7 +425,7 @@ class RegExpAtom final : public RegExpTree {
 
 class RegExpText final : public RegExpTree {
   public:
-    explicit RegExpText(LifoAlloc* alloc) : elements_(*alloc), length_(0) {}
+    explicit RegExpText(Zone* zone) : elements_(*zone), length_(0) {}
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
@@ -434,8 +434,8 @@ class RegExpText final : public RegExpTree {
     bool IsTextElement() override { return true; }
     int min_match() override { return length_; }
     int max_match() override { return length_; }
-    void AppendToText(RegExpText* text) override;
-    void AddElement(TextElement elm)  {
+    void AppendToText(RegExpText* text, Zone* zone) override;
+    void AddElement(TextElement elm, Zone* zone)  {
         elements_.append(elm);
         length_ += elm.length();
     }

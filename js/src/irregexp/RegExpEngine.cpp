@@ -46,6 +46,7 @@ using mozilla::ArrayLength;
 using mozilla::DebugOnly;
 using mozilla::Maybe;
 
+using irregexp::Zone;
 using jit::Label;
 
 static const int kRangeEndMarker = 0x10000;
@@ -222,21 +223,21 @@ ContainedInLattice irregexp::AddRange(ContainedInLattice containment,
 //   trace is not recorded in the node and so it cannot currently be reused in
 //   the event that code generation is requested for an identical trace.
 
-void RegExpTree::AppendToText(RegExpText* text) {
+void RegExpTree::AppendToText(RegExpText* text, Zone* zone) {
     MOZ_CRASH("Bad call");
 }
 
-void RegExpAtom::AppendToText(RegExpText* text) {
-    text->AddElement(TextElement::Atom(this));
+void RegExpAtom::AppendToText(RegExpText* text, Zone* zone) {
+    text->AddElement(TextElement::Atom(this), zone);
 }
 
-void RegExpCharacterClass::AppendToText(RegExpText* text) {
-    text->AddElement(TextElement::CharClass(this));
+void RegExpCharacterClass::AppendToText(RegExpText* text, Zone* zone) {
+    text->AddElement(TextElement::CharClass(this), zone);
 }
 
-void RegExpText::AppendToText(RegExpText* text) {
+void RegExpText::AppendToText(RegExpText* text, Zone* zone) {
     for (size_t i = 0; i < elements()->length(); i++)
-        text->AddElement(elements()->at(i));
+        text->AddElement(elements()->at(i), zone);
 }
 
 TextElement TextElement::Atom(RegExpAtom* atom) {
@@ -304,7 +305,7 @@ class FrequencyCollator {
 
 class irregexp::RegExpCompiler {
   public:
-    RegExpCompiler(JSContext* cx, LifoAlloc* alloc, int capture_count,
+    RegExpCompiler(JSContext* cx, Zone* zone, int capture_count,
                    bool ignore_case, bool is_one_byte, bool match_only, bool unicode);
 
     int AllocateRegister() {
@@ -352,7 +353,7 @@ class irregexp::RegExpCompiler {
     }
 
     JSContext* cx() const { return cx_; }
-    LifoAlloc* alloc() const { return alloc_; }
+    Zone* zone() const { return zone_; }
 
     static const int kNoRegister = -1;
 
@@ -372,7 +373,7 @@ class irregexp::RegExpCompiler {
     int current_expansion_factor_;
     FrequencyCollator frequency_collator_;
     JSContext* cx_;
-    LifoAlloc* alloc_;
+    Zone* zone_;
 };
 
 class RecursionCheck {
@@ -388,7 +389,7 @@ class RecursionCheck {
 
 // Attempts to compile the regexp using an Irregexp code generator.  Returns
 // a fixed array or a null handle depending on whether it succeeded.
-RegExpCompiler::RegExpCompiler(JSContext* cx, LifoAlloc* alloc, int capture_count,
+RegExpCompiler::RegExpCompiler(JSContext* cx, Zone* zone, int capture_count,
                                bool ignore_case, bool one_byte, bool match_only, bool unicode)
   : next_register_(2 * (capture_count + 1)),
     recursion_depth_(0),
@@ -400,8 +401,8 @@ RegExpCompiler::RegExpCompiler(JSContext* cx, LifoAlloc* alloc, int capture_coun
     current_expansion_factor_(1),
     frequency_collator_(),
     cx_(cx),
-    alloc_(alloc) {
-    accept_ = alloc->newInfallible<EndNode>(alloc, EndNode::ACCEPT);
+    zone_(zone) {
+    accept_ = zone->newInfallible<EndNode>(EndNode::ACCEPT, zone);
     DCHECK(next_register_ - 1 <= RegExpMacroAssembler::kMaxRegister);
 }
 
@@ -416,7 +417,7 @@ RegExpCode RegExpCompiler::Assemble(JSContext* cx,
     // expected to crash on OOM. Thus we have to disable the assertions made to
     // prevent us from allocating any new chunk in the LifoAlloc. This is needed
     // because the jit::MacroAssembler turns these assertions on by default.
-    LifoAlloc::AutoFallibleScope fallibleAllocator(alloc());
+    LifoAlloc::AutoFallibleScope fallibleAllocator(zone());
 
     Label fail;
     macro_assembler_->PushBacktrack(&fail);
@@ -478,7 +479,7 @@ bool Trace::GetStoredPosition(int reg, int* cp_offset) {
     return false;
 }
 
-int Trace::FindAffectedRegisters(LifoAlloc* alloc, OutSet* affected_registers) {
+int Trace::FindAffectedRegisters(OutSet* affected_registers, Zone* zone) {
     int max_register = RegExpCompiler::kNoRegister;
     for (DeferredAction* action = actions_;
          action != nullptr;
@@ -486,10 +487,10 @@ int Trace::FindAffectedRegisters(LifoAlloc* alloc, OutSet* affected_registers) {
         if (action->action_type() == ActionNode::CLEAR_CAPTURES) {
             Interval range = static_cast<DeferredClearCaptures*>(action)->range();
             for (int i = range.from(); i <= range.to(); i++)
-                affected_registers->Set(alloc, i);
+                affected_registers->Set(i, zone);
             if (range.to() > max_register) max_register = range.to();
         } else {
-            affected_registers->Set(alloc, action->reg());
+            affected_registers->Set(action->reg(), zone);
             if (action->reg() > max_register) max_register = action->reg();
         }
     }
@@ -513,12 +514,12 @@ void Trace::RestoreAffectedRegisters(RegExpMacroAssembler* assembler,
     }
 }
 
-void Trace::PerformDeferredActions(LifoAlloc* alloc,
-                                   RegExpMacroAssembler* assembler,
+void Trace::PerformDeferredActions(RegExpMacroAssembler* assembler,
                                    int max_register,
                                    const OutSet& affected_registers,
                                    OutSet* registers_to_pop,
-                                   OutSet* registers_to_clear) {
+                                   OutSet* registers_to_clear,
+                                   Zone* zone) {
     // The "+1" is to avoid a push_limit of zero if stack_limit_slack() is 1.
     const int push_limit = (assembler->stack_limit_slack() + 1) / 2;
 
@@ -624,9 +625,9 @@ void Trace::PerformDeferredActions(LifoAlloc* alloc,
             }
 
             assembler->PushRegister(reg, stack_check);
-            registers_to_pop->Set(alloc, reg);
+            registers_to_pop->Set(reg, zone);
         } else if (undo_action == CLEAR) {
-            registers_to_clear->Set(alloc, reg);
+            registers_to_clear->Set(reg, zone);
         }
         // Perform the chronologically last action (or accumulated increment)
         // for the register.
@@ -671,15 +672,16 @@ void Trace::Flush(RegExpCompiler* compiler, RegExpNode* successor) {
         assembler->PushCurrentPosition();
     }
 
-    int max_register = FindAffectedRegisters(compiler->alloc(), &affected_registers);
+    int max_register = FindAffectedRegisters(&affected_registers,
+                                             compiler->zone());
     OutSet registers_to_pop;
     OutSet registers_to_clear;
-    PerformDeferredActions(compiler->alloc(),
-                           assembler,
+    PerformDeferredActions(assembler,
                            max_register,
                            affected_registers,
                            &registers_to_pop,
-                           &registers_to_clear);
+                           &registers_to_clear,
+                           compiler->zone());
     if (cp_offset_ != 0) {
         assembler->AdvanceCurrentPosition(cp_offset_);
     }
@@ -755,9 +757,9 @@ void EndNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     MOZ_CRASH("Bad action");
 }
 
-void GuardedAlternative::AddGuard(LifoAlloc* alloc, Guard* guard) {
+void GuardedAlternative::AddGuard(Guard* guard, Zone* zone) {
     if (guards_ == nullptr)
-        guards_ = alloc->newInfallible<GuardVector>(*alloc);
+        guards_ = zone->newInfallible<GuardVector>(*zone);
     guards_->append(guard);
 }
 
@@ -765,7 +767,7 @@ ActionNode* ActionNode::SetRegister(int reg,
                                     int val,
                                     RegExpNode* on_success) {
     ActionNode* result =
-        on_success->alloc()->newInfallible<ActionNode>(SET_REGISTER, on_success);
+        on_success->zone()->newInfallible<ActionNode>(SET_REGISTER, on_success);
     result->data_.u_store_register.reg = reg;
     result->data_.u_store_register.value = val;
     return result;
@@ -773,7 +775,7 @@ ActionNode* ActionNode::SetRegister(int reg,
 
 ActionNode* ActionNode::IncrementRegister(int reg, RegExpNode* on_success) {
     ActionNode* result =
-        on_success->alloc()->newInfallible<ActionNode>(INCREMENT_REGISTER, on_success);
+        on_success->zone()->newInfallible<ActionNode>(INCREMENT_REGISTER, on_success);
     result->data_.u_increment_register.reg = reg;
     return result;
 }
@@ -782,15 +784,16 @@ ActionNode* ActionNode::StorePosition(int reg,
                                       bool is_capture,
                                       RegExpNode* on_success) {
     ActionNode* result =
-        on_success->alloc()->newInfallible<ActionNode>(STORE_POSITION, on_success);
+        on_success->zone()->newInfallible<ActionNode>(STORE_POSITION, on_success);
     result->data_.u_position_register.reg = reg;
     result->data_.u_position_register.is_capture = is_capture;
     return result;
 }
 
-ActionNode* ActionNode::ClearCaptures(Interval range, RegExpNode* on_success) {
+ActionNode* ActionNode::ClearCaptures(Interval range,
+                                      RegExpNode* on_success) {
     ActionNode* result =
-        on_success->alloc()->newInfallible<ActionNode>(CLEAR_CAPTURES, on_success);
+        on_success->zone()->newInfallible<ActionNode>(CLEAR_CAPTURES, on_success);
     result->data_.u_clear_captures.range_from = range.from();
     result->data_.u_clear_captures.range_to = range.to();
     return result;
@@ -800,7 +803,7 @@ ActionNode* ActionNode::BeginSubmatch(int stack_reg,
                                       int position_reg,
                                       RegExpNode* on_success) {
     ActionNode* result =
-        on_success->alloc()->newInfallible<ActionNode>(BEGIN_SUBMATCH, on_success);
+        on_success->zone()->newInfallible<ActionNode>(BEGIN_SUBMATCH, on_success);
     result->data_.u_submatch.stack_pointer_register = stack_reg;
     result->data_.u_submatch.current_position_register = position_reg;
     return result;
@@ -812,7 +815,7 @@ ActionNode* ActionNode::PositiveSubmatchSuccess(int stack_reg,
                                                 int clear_register_from,
                                                 RegExpNode* on_success) {
     ActionNode* result =
-        on_success->alloc()->newInfallible<ActionNode>(POSITIVE_SUBMATCH_SUCCESS, on_success);
+        on_success->zone()->newInfallible<ActionNode>(POSITIVE_SUBMATCH_SUCCESS, on_success);
     result->data_.u_submatch.stack_pointer_register = stack_reg;
     result->data_.u_submatch.current_position_register = position_reg;
     result->data_.u_submatch.clear_register_count = clear_register_count;
@@ -825,7 +828,7 @@ ActionNode* ActionNode::EmptyMatchCheck(int start_register,
                                         int repetition_limit,
                                         RegExpNode* on_success) {
     ActionNode* result =
-        on_success->alloc()->newInfallible<ActionNode>(EMPTY_MATCH_CHECK, on_success);
+        on_success->zone()->newInfallible<ActionNode>(EMPTY_MATCH_CHECK, on_success);
     result->data_.u_empty_match_check.start_register = start_register;
     result->data_.u_empty_match_check.repetition_register = repetition_register;
     result->data_.u_empty_match_check.repetition_limit = repetition_limit;
@@ -1460,12 +1463,11 @@ static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector* ra
     }
 }
 
-static void EmitCharClass(LifoAlloc* alloc,
-                          RegExpMacroAssembler* macro_assembler,
+static void EmitCharClass(RegExpMacroAssembler* macro_assembler,
                           RegExpCharacterClass* cc, bool one_byte,
                           Label* on_failure, int cp_offset, bool check_offset,
-                          bool preloaded) {
-    CharacterRangeVector* ranges = cc->ranges(alloc);
+                          bool preloaded, LifoAlloc* zone) {
+    CharacterRangeVector* ranges = cc->ranges(zone);
     if (!CharacterRange::IsCanonical(ranges)) {
         CharacterRange::Canonicalize(ranges);
     }
@@ -1523,7 +1525,7 @@ static void EmitCharClass(LifoAlloc* alloc,
         macro_assembler->LoadCurrentCharacter(cp_offset, on_failure, check_offset);
     }
 
-    if (cc->is_standard(alloc) &&
+    if (cc->is_standard(zone) &&
         macro_assembler->CheckSpecialCharacterClass(cc->standard_type(),
                                                     on_failure)) {
         return;
@@ -1536,7 +1538,7 @@ static void EmitCharClass(LifoAlloc* alloc,
     // was already one there we fall through for success on that entry.
     // Subsequent entries have alternating meaning (success/failure).
     RangeBoundaryVector* range_boundaries =
-        alloc->newInfallible<RangeBoundaryVector>(*alloc);
+        zone->newInfallible<RangeBoundaryVector>(*zone);
 
     bool zeroth_entry_is_failure = !cc->is_negated();
 
@@ -1929,7 +1931,7 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
             QuickCheckDetails::Position* pos =
                 details->positions(characters_filled_in);
             RegExpCharacterClass* tree = elm.char_class();
-            CharacterRangeVector* ranges = tree->ranges(alloc());
+            CharacterRangeVector* ranges = tree->ranges(zone());
             if (tree->is_negated()) {
                 // A quick check uses multi-character mask and compare.  There is no
                 // useful way to incorporate a negative char class into this scheme
@@ -2120,7 +2122,7 @@ RegExpNode* TextNode::FilterOneByte(int depth, bool ignore_case, bool unicode) {
             DCHECK(elm.text_type() == TextElement::CHAR_CLASS);
             RegExpCharacterClass* cc = elm.char_class();
 
-            CharacterRangeVector* ranges = cc->ranges(alloc());
+            CharacterRangeVector* ranges = cc->ranges(zone());
             if (!CharacterRange::IsCanonical(ranges))
                 CharacterRange::Canonicalize(ranges);
 
@@ -2201,7 +2203,7 @@ RegExpNode* ChoiceNode::FilterOneByte(int depth, bool ignore_case, bool unicode)
     }
     // Only some of the nodes survived the filtering.  We need to rebuild the
     // alternatives list.
-    GuardedAlternativeVector new_alternatives(*alloc());
+    GuardedAlternativeVector new_alternatives(*zone());
     new_alternatives.reserve(surviving);
     for (int i = 0; i < choice_count; i++) {
         RegExpNode* replacement =
@@ -2371,7 +2373,7 @@ void AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler, Trace* trace) {
                                                         not_at_start));
         if (eats_at_least >= 1) {
             BoyerMooreLookahead* bm =
-                alloc()->newInfallible<BoyerMooreLookahead>(alloc(), eats_at_least, compiler);
+                zone()->newInfallible<BoyerMooreLookahead>(eats_at_least, compiler, zone());
             FillInBMInfo(0, kRecursionBudget, bm, not_at_start);
             if (bm->at(0)->is_non_word())
                 next_is_word_character = Trace::FALSE_VALUE;
@@ -2627,7 +2629,7 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
         TextElement elm = elements()->at(i);
         int cp_offset = trace->cp_offset() + elm.cp_offset();
         if (elm.text_type() == TextElement::ATOM) {
-            const CharacterVector& quarks = elm.atom()->data();
+            CharacterVector& quarks = elm.atom()->data();
             for (int j = preloaded ? 0 : quarks.length() - 1; j >= 0; j--) {
                 if (first_element_checked && i == 0 && j == 0) continue;
                 if (DeterminedAlready(quick_check, elm.cp_offset() + j)) continue;
@@ -2670,8 +2672,8 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
                 if (DeterminedAlready(quick_check, elm.cp_offset())) continue;
                 RegExpCharacterClass* cc = elm.char_class();
                 bool bounds_check = *checked_up_to < cp_offset;
-                EmitCharClass(alloc(), assembler, cc, one_byte, backtrack, cp_offset,
-                              bounds_check, preloaded);
+                EmitCharClass(assembler, cc, one_byte, backtrack, cp_offset,
+                              bounds_check, preloaded, zone());
                 UpdateBoundsCheck(cp_offset, checked_up_to);
             }
         }
@@ -2786,12 +2788,12 @@ void TextNode::MakeCaseIndependent(bool is_one_byte, bool unicode) {
 
             // None of the standard character classes is different in the case
             // independent case and it slows us down if we don't know that.
-            if (cc->is_standard(alloc())) continue;
+            if (cc->is_standard(zone())) continue;
 
             // Similarly, there's nothing to do for the character class
             // containing all characters except line terminators and surrogates.
             // This one is added by UnicodeEverythingAtom.
-            CharacterRangeVector* ranges = cc->ranges(alloc());
+            CharacterRangeVector* ranges = cc->ranges(zone());
             if (CompareInverseRanges(ranges,
                                      kLineTerminatorAndSurrogateRanges,
                                      kLineTerminatorAndSurrogateRangeCount))
@@ -2814,7 +2816,7 @@ RegExpNode* TextNode::GetSuccessorOfOmnivorousTextNode(
     TextElement elm = elements()->at(0);
     if (elm.text_type() != TextElement::CHAR_CLASS) return nullptr;
     RegExpCharacterClass* node = elm.char_class();
-    CharacterRangeVector* ranges = node->ranges(alloc());
+    CharacterRangeVector* ranges = node->ranges(zone());
     if (!CharacterRange::IsCanonical(ranges))
         CharacterRange::Canonicalize(ranges);
     if (node->is_negated()) {
@@ -2928,8 +2930,8 @@ class irregexp::AlternativeGeneration {
 // size then it is on the stack, otherwise the excess is on the heap.
 class irregexp::AlternativeGenerationList {
   public:
-    AlternativeGenerationList(LifoAlloc* alloc, size_t count)
-      : alt_gens_(*alloc)
+    AlternativeGenerationList(size_t count, Zone* zone)
+      : alt_gens_(*zone)
     {
         alt_gens_.reserve(count);
         for (size_t i = 0; i < count && i < kAFew; i++)
@@ -2999,10 +3001,10 @@ void BoyerMoorePositionInfo::SetAll() {
 }
 
 BoyerMooreLookahead::BoyerMooreLookahead(
-    LifoAlloc* alloc, size_t length, RegExpCompiler* compiler)
+    size_t length, RegExpCompiler* compiler, Zone* zone)
     : length_(length),
       compiler_(compiler),
-      bitmaps_(*alloc) {
+      bitmaps_(*zone) {
     bool unicode_ignore_case = compiler->unicode() && compiler->ignore_case();
     if (compiler->one_byte()) {
         max_char_ = String::kMaxOneByteCharCode;
@@ -3011,7 +3013,7 @@ BoyerMooreLookahead::BoyerMooreLookahead(
     }
     bitmaps_.reserve(length);
     for (size_t i = 0; i < length; i++) {
-        bitmaps_.append(alloc->newInfallible<BoyerMoorePositionInfo>(alloc, unicode_ignore_case));
+        bitmaps_.append(zone->newInfallible<BoyerMoorePositionInfo>(unicode_ignore_case, zone));
     }
 }
 
@@ -3360,7 +3362,9 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
                                                     not_at_start));
                     if (eats_at_least >= 1) {
                         BoyerMooreLookahead* bm =
-                            alloc()->newInfallible<BoyerMooreLookahead>(alloc(), eats_at_least, compiler);
+                            zone()->newInfallible<BoyerMooreLookahead>(eats_at_least,
+                                                                       compiler,
+                                                                       zone());
                         GuardedAlternative alt0 = alternatives()->at(0);
                         alt0.node()->FillInBMInfo(0, kRecursionBudget, bm, not_at_start);
                         skip_was_emitted = bm->EmitSkipInstructions(macro_assembler);
@@ -3383,7 +3387,7 @@ void ChoiceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
         (current_trace->characters_preloaded() == preload_characters);
     bool preload_has_checked_bounds = preload_is_current;
 
-    AlternativeGenerationList alt_gens(alloc(), choice_count);
+    AlternativeGenerationList alt_gens(choice_count, zone());
 
     // For now we just call all choices one after the other.  The idea ultimately
     // is to use the Dispatch table to try only the relevant ones.
@@ -3679,14 +3683,14 @@ void BackReferenceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
 RegExpNode* RegExpAtom::ToNode(RegExpCompiler* compiler,
                                RegExpNode* on_success) {
     TextElementVector* elms =
-        compiler->alloc()->newInfallible<TextElementVector>(*compiler->alloc());
+        compiler->zone()->newInfallible<TextElementVector>(*compiler->zone());
     elms->append(TextElement::Atom(this));
-    return compiler->alloc()->newInfallible<TextNode>(elms, on_success);
+    return compiler->zone()->newInfallible<TextNode>(elms, on_success);
 }
 
 RegExpNode* RegExpText::ToNode(RegExpCompiler* compiler,
                                RegExpNode* on_success) {
-    return compiler->alloc()->newInfallible<TextNode>(&elements_, on_success);
+    return compiler->zone()->newInfallible<TextNode>(&elements_, on_success);
 }
 
 static bool CompareInverseRanges(const CharacterRangeVector* ranges,
@@ -3737,7 +3741,7 @@ static bool CompareRanges(const CharacterRangeVector* ranges,
     return true;
 }
 
-bool RegExpCharacterClass::is_standard(LifoAlloc* alloc) {
+bool RegExpCharacterClass::is_standard(Zone* zone) {
     // TODO(lrn): Remove need for this function, by not throwing away information
     // along the way.
     if (is_negated()) {
@@ -3746,31 +3750,31 @@ bool RegExpCharacterClass::is_standard(LifoAlloc* alloc) {
     if (set_.is_standard()) {
         return true;
     }
-    if (CompareRanges(set_.ranges(alloc), kSpaceRanges, kSpaceRangeCount)) {
+    if (CompareRanges(set_.ranges(zone), kSpaceRanges, kSpaceRangeCount)) {
         set_.set_standard_set_type('s');
         return true;
     }
-    if (CompareInverseRanges(set_.ranges(alloc), kSpaceRanges, kSpaceRangeCount)) {
+    if (CompareInverseRanges(set_.ranges(zone), kSpaceRanges, kSpaceRangeCount)) {
         set_.set_standard_set_type('S');
         return true;
     }
-    if (CompareInverseRanges(set_.ranges(alloc),
+    if (CompareInverseRanges(set_.ranges(zone),
                              kLineTerminatorRanges,
                              kLineTerminatorRangeCount)) {
         set_.set_standard_set_type('.');
         return true;
     }
-    if (CompareRanges(set_.ranges(alloc),
+    if (CompareRanges(set_.ranges(zone),
                       kLineTerminatorRanges,
                       kLineTerminatorRangeCount)) {
         set_.set_standard_set_type('n');
         return true;
     }
-    if (CompareRanges(set_.ranges(alloc), kWordRanges, kWordRangeCount)) {
+    if (CompareRanges(set_.ranges(zone), kWordRanges, kWordRangeCount)) {
         set_.set_standard_set_type('w');
         return true;
     }
-    if (CompareInverseRanges(set_.ranges(alloc), kWordRanges, kWordRangeCount)) {
+    if (CompareInverseRanges(set_.ranges(zone), kWordRanges, kWordRangeCount)) {
         set_.set_standard_set_type('W');
         return true;
     }
@@ -3779,7 +3783,7 @@ bool RegExpCharacterClass::is_standard(LifoAlloc* alloc) {
 
 RegExpNode* RegExpCharacterClass::ToNode(RegExpCompiler* compiler,
                                          RegExpNode* on_success) {
-    return compiler->alloc()->newInfallible<TextNode>(this, on_success);
+    return compiler->zone()->newInfallible<TextNode>(this, on_success);
 }
 
 RegExpNode* RegExpDisjunction::ToNode(RegExpCompiler* compiler,
@@ -3789,7 +3793,7 @@ RegExpNode* RegExpDisjunction::ToNode(RegExpCompiler* compiler,
 
     const RegExpTreeVector* alternatives = this->alternatives();
     size_t length = alternatives->length();
-    ChoiceNode* result = compiler->alloc()->newInfallible<ChoiceNode>(compiler->alloc(), length);
+    ChoiceNode* result = compiler->zone()->newInfallible<ChoiceNode>(length, compiler->zone());
     for (size_t i = 0; i < length && !compiler->isRegExpTooBig(); i++) {
         GuardedAlternative alternative(alternatives->at(i)->ToNode(compiler,
                                                                    on_success));
@@ -3883,7 +3887,7 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
     int body_start_reg = RegExpCompiler::kNoRegister;
     Interval capture_registers = body->CaptureRegisters();
     bool needs_capture_clearing = !capture_registers.is_empty();
-    LifoAlloc* alloc = compiler->alloc();
+    Zone* zone = compiler->zone();
 
     if (body_can_be_empty) {
         body_start_reg = compiler->AllocateRegister();
@@ -3915,7 +3919,7 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
                 // Unroll the optional matches up to max.
                 RegExpNode* answer = on_success;
                 for (int i = 0; i < max; i++) {
-                    ChoiceNode* alternation = alloc->newInfallible<ChoiceNode>(alloc, 2);
+                    ChoiceNode* alternation = zone->newInfallible<ChoiceNode>(2, zone);
                     if (is_greedy) {
                         alternation->AddAlternative(
                             GuardedAlternative(body->ToNode(compiler, answer)));
@@ -3940,7 +3944,7 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
     int reg_ctr = needs_counter
         ? compiler->AllocateRegister()
         : RegExpCompiler::kNoRegister;
-    LoopChoiceNode* center = alloc->newInfallible<LoopChoiceNode>(alloc, body->min_match() == 0);
+    LoopChoiceNode* center = zone->newInfallible<LoopChoiceNode>(body->min_match() == 0, zone);
     if (not_at_start) center->set_not_at_start();
     RegExpNode* loop_return = needs_counter
         ? static_cast<RegExpNode*>(ActionNode::IncrementRegister(reg_ctr, center))
@@ -3965,13 +3969,13 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
     }
     GuardedAlternative body_alt(body_node);
     if (has_max) {
-        Guard* body_guard = alloc->newInfallible<Guard>(reg_ctr, Guard::LT, max);
-        body_alt.AddGuard(alloc, body_guard);
+        Guard* body_guard = zone->newInfallible<Guard>(reg_ctr, Guard::LT, max);
+        body_alt.AddGuard(body_guard, zone);
     }
     GuardedAlternative rest_alt(on_success);
     if (has_min) {
-        Guard* rest_guard = alloc->newInfallible<Guard>(reg_ctr, Guard::GEQ, min);
-        rest_alt.AddGuard(alloc, rest_guard);
+        Guard* rest_guard = zone->newInfallible<Guard>(reg_ctr, Guard::GEQ, min);
+        rest_alt.AddGuard(rest_guard, zone);
     }
     if (is_greedy) {
         center->AddLoopAlternative(body_alt);
@@ -3990,7 +3994,7 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
 RegExpNode* RegExpAssertion::ToNode(RegExpCompiler* compiler,
                                     RegExpNode* on_success) {
     NodeInfo info;
-    LifoAlloc* alloc = compiler->alloc();
+    Zone* zone = compiler->zone();
 
     switch (assertion_type()) {
       case START_OF_LINE:
@@ -4010,18 +4014,18 @@ RegExpNode* RegExpAssertion::ToNode(RegExpCompiler* compiler,
         int stack_pointer_register = compiler->AllocateRegister();
         int position_register = compiler->AllocateRegister();
         // The ChoiceNode to distinguish between a newline and end-of-input.
-        ChoiceNode* result = alloc->newInfallible<ChoiceNode>(alloc, 2);
+        ChoiceNode* result = zone->newInfallible<ChoiceNode>(2, zone);
         // Create a newline atom.
-        CharacterRangeVector* newline_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-        CharacterRange::AddClassEscape(alloc, 'n', newline_ranges);
-        RegExpCharacterClass* newline_atom = alloc->newInfallible<RegExpCharacterClass>('n');
+        CharacterRangeVector* newline_ranges = zone->newInfallible<CharacterRangeVector>(*zone);
+        CharacterRange::AddClassEscape('n', newline_ranges, zone);
+        RegExpCharacterClass* newline_atom = zone->newInfallible<RegExpCharacterClass>('n');
         TextNode* newline_matcher =
-            alloc->newInfallible<TextNode>(newline_atom,
-                ActionNode::PositiveSubmatchSuccess(stack_pointer_register,
-                                                    position_register,
-                                                    0,  // No captures inside.
-                                                    -1,  // Ignored if no captures.
-                                                    on_success));
+            zone->newInfallible<TextNode>(
+                newline_atom, ActionNode::PositiveSubmatchSuccess(
+                                    stack_pointer_register, position_register,
+                                    0,  // No captures inside.
+                                    -1,  // Ignored if no captures.
+                                    on_success));
         // Create an end-of-input matcher.
         RegExpNode* end_of_line = ActionNode::BeginSubmatch(
             stack_pointer_register,
@@ -4046,9 +4050,9 @@ RegExpNode* RegExpAssertion::ToNode(RegExpCompiler* compiler,
 
 RegExpNode* RegExpBackReference::ToNode(RegExpCompiler* compiler,
                                         RegExpNode* on_success) {
-    return compiler->alloc()->newInfallible<BackReferenceNode>(RegExpCapture::StartRegister(index()),
-                                                               RegExpCapture::EndRegister(index()),
-                                                               on_success);
+    return compiler->zone()->newInfallible<BackReferenceNode>(RegExpCapture::StartRegister(index()),
+                                                              RegExpCapture::EndRegister(index()),
+                                                              on_success);
 }
 
 RegExpNode* RegExpEmpty::ToNode(RegExpCompiler* compiler,
@@ -4070,11 +4074,10 @@ RegExpLookaround::Builder::Builder(bool is_positive, RegExpNode* on_success,
             stack_pointer_register, position_register, capture_register_count,
             capture_register_start, on_success_);
     } else {
-        LifoAlloc* alloc = on_success_->alloc();
-        on_match_success_ = alloc->newInfallible<NegativeSubmatchSuccess>(
-            alloc,
+        Zone* zone = on_success_->zone();
+        on_match_success_ = zone->newInfallible<NegativeSubmatchSuccess>(
             stack_pointer_register, position_register, capture_register_count,
-            capture_register_start);
+            capture_register_start, zone);
     }
 }
 
@@ -4084,14 +4087,14 @@ RegExpNode* RegExpLookaround::Builder::ForMatch(RegExpNode* match) {
         return ActionNode::BeginSubmatch(stack_pointer_register_,
                                         position_register_, match);
     } else {
-        LifoAlloc* alloc = on_success_->alloc();
+        Zone* zone = on_success_->zone();
         // We use a ChoiceNode to represent the negative lookaround. The first
         // alternative is the negative match. On success, the end node backtracks.
         // On failure, the second alternative is tried and leads to success.
         // NegativeLookaheadChoiceNode is a special ChoiceNode that ignores the
         // first exit when calculating quick checks.
-        ChoiceNode* choice_node = alloc->newInfallible<NegativeLookaroundChoiceNode>(
-            alloc, GuardedAlternative(match), GuardedAlternative(on_success_));
+        ChoiceNode* choice_node = zone->newInfallible<NegativeLookaroundChoiceNode>(
+            GuardedAlternative(match), GuardedAlternative(on_success_), zone);
         return ActionNode::BeginSubmatch(stack_pointer_register_,
                                         position_register_, choice_node);
     }
@@ -4134,18 +4137,18 @@ RegExpNode* RegExpLookaround::ToNode(RegExpCompiler* compiler,
     // for a negative lookahead.  The NegativeLookaheadChoiceNode is a special
     // ChoiceNode that knows to ignore the first exit when calculating quick
     // checks.
-    LifoAlloc* alloc = compiler->alloc();
+    Zone* zone = compiler->zone();
 
     RegExpNode* success =
-        alloc->newInfallible<NegativeSubmatchSuccess>(alloc,
-                                                      stack_pointer_register,
-                                                      position_register,
-                                                      register_count,
-                                                      register_start);
+        zone->newInfallible<NegativeSubmatchSuccess>(stack_pointer_register,
+                                                     position_register,
+                                                     register_count,
+                                                     register_start,
+                                                     zone);
     GuardedAlternative body_alt(body()->ToNode(compiler, success));
 
     ChoiceNode* choice_node =
-        alloc->newInfallible<NegativeLookaroundChoiceNode>(alloc, body_alt, GuardedAlternative(on_success));
+        zone->newInfallible<NegativeLookaroundChoiceNode>(body_alt, GuardedAlternative(on_success), zone);
 
     return ActionNode::BeginSubmatch(stack_pointer_register,
                                      position_register,
@@ -4211,8 +4214,8 @@ void js::irregexp::AddClassNegated(const int* elmv,
     ranges->append(CharacterRange(last, String::kMaxUtf16CodeUnit));
 }
 
-void CharacterRange::AddClassEscape(LifoAlloc* alloc,
-                                    char16_t type, CharacterRangeVector* ranges) {
+void CharacterRange::AddClassEscape(char16_t type, CharacterRangeVector* ranges,
+                                    Zone* zone) {
     switch (type) {
       case 's':
         AddClass(kSpaceRanges, kSpaceRangeCount, ranges);
@@ -4256,13 +4259,13 @@ void CharacterRange::AddClassEscape(LifoAlloc* alloc,
 }
 
 // Add class escape, excluding surrogate pair range.
-void CharacterRange::AddClassEscapeUnicode(LifoAlloc* alloc,
-                                           char16_t type, CharacterRangeVector* ranges,
-                                           bool ignore_case) {
+void CharacterRange::AddClassEscapeUnicode(char16_t type, CharacterRangeVector* ranges,
+                                           bool ignore_case,
+                                           Zone* zone) {
     switch (type) {
       case 's':
       case 'd':
-        return AddClassEscape(alloc, type, ranges);
+        return AddClassEscape(type, ranges, zone);
         break;
       case 'S':
         AddClassNegated(kSpaceAndSurrogateRanges, kSpaceAndSurrogateRangeCount, ranges);
@@ -4271,7 +4274,7 @@ void CharacterRange::AddClassEscapeUnicode(LifoAlloc* alloc,
         if (ignore_case)
             AddClass(kIgnoreCaseWordRanges, kIgnoreCaseWordRangeCount, ranges);
         else
-            AddClassEscape(alloc, type, ranges);
+            AddClassEscape(type, ranges, zone);
         break;
       case 'W':
         if (ignore_case) {
@@ -4355,10 +4358,10 @@ bool CharacterRange::IsCanonical(CharacterRangeVector* ranges) {
     return true;
 }
 
-CharacterRangeVector* CharacterSet::ranges(LifoAlloc* alloc) {
+CharacterRangeVector* CharacterSet::ranges(Zone* zone) {
     if (ranges_ == nullptr) {
-        ranges_ = alloc->newInfallible<CharacterRangeVector>(*alloc);
-        CharacterRange::AddClassEscape(alloc, standard_set_type_, ranges_);
+        ranges_ = zone->newInfallible<CharacterRangeVector>(*zone);
+        CharacterRange::AddClassEscape(standard_set_type_, ranges_, zone);
     }
     return ranges_;
 }
@@ -4481,12 +4484,12 @@ void CharacterRange::Canonicalize(CharacterRangeVector* character_ranges) {
 // Splay tree
 
 
-void OutSet::Set(LifoAlloc* alloc, unsigned value) {
+void OutSet::Set(unsigned value, Zone* zone) {
     if (value < kFirstLimit) {
         first_ |= (1 << value);
     } else {
         if (remaining_ == nullptr)
-            remaining_ = alloc->newInfallible<RemainingVector>(*alloc);
+            remaining_ = zone->newInfallible<RemainingVector>(*zone);
 
         if (!remaining_->contains(value))
             remaining_->append(value);
@@ -4667,7 +4670,7 @@ bool TextNode::FillInBMInfo(int initial_offset, int budget,
         } else {
             DCHECK_EQ(TextElement::CHAR_CLASS, text.text_type());
             RegExpCharacterClass* char_class = text.char_class();
-            CharacterRangeVector* ranges = char_class->ranges(alloc());
+            CharacterRangeVector* ranges = char_class->ranges(zone());
             if (char_class->is_negated()) {
                 bm->SetAll(offset);
             } else {
@@ -4816,7 +4819,7 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
         if (data->contains_anchor) {
             // Unroll loop once, to take care of the case that might start
             // at the start of input.
-            ChoiceNode* first_step_node = alloc.newInfallible<ChoiceNode>(&alloc, 2);
+            ChoiceNode* first_step_node = alloc.newInfallible<ChoiceNode>(2, &alloc);
             RegExpNode* char_class =
                 alloc.newInfallible<TextNode>(alloc.newInfallible<RegExpCharacterClass>('*'), loop_node);
             first_step_node->AddAlternative(GuardedAlternative(captured_body));
@@ -4843,7 +4846,7 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
     }
 
     if (node == nullptr)
-        node = alloc.newInfallible<EndNode>(&alloc, EndNode::BACKTRACK);
+        node = alloc.newInfallible<EndNode>(EndNode::BACKTRACK, &alloc);
 
     Analysis analysis(cx, ignore_case, is_one_byte, unicode);
     analysis.EnsureAnalyzed(node);

@@ -137,7 +137,7 @@ AddCharOrEscape(LifoAlloc* alloc,
                 widechar c)
 {
     if (char_class != kNoCharClass)
-        CharacterRange::AddClassEscape(alloc, char_class, ranges);
+        CharacterRange::AddClassEscape(char_class, ranges, alloc);
     else
         ranges->append(CharacterRange::Singleton(c));
 }
@@ -153,7 +153,7 @@ AddCharOrEscapeUnicode(LifoAlloc* alloc,
                        bool ignore_case)
 {
     if (char_class != kNoCharClass) {
-        CharacterRange::AddClassEscapeUnicode(alloc, char_class, ranges, ignore_case);
+        CharacterRange::AddClassEscapeUnicode(char_class, ranges, ignore_case, alloc);
         switch (char_class) {
           case 'S':
           case 'W':
@@ -850,7 +850,7 @@ RegExpParser<CharT>::ParseDisjunction()
                 break;
             }
             CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-            CharacterRange::AddClassEscape(alloc, '.', ranges);
+            CharacterRange::AddClassEscape('.', ranges, alloc);
             RegExpTree* atom = alloc->newInfallible<RegExpCharacterClass>(ranges, false);
             builder->AddAtom(atom);
             break;
@@ -927,9 +927,9 @@ RegExpParser<CharT>::ParseDisjunction()
                 CharacterRangeVector* ranges =
                     alloc->newInfallible<CharacterRangeVector>(*alloc);
                 if (unicode_)
-                    CharacterRange::AddClassEscapeUnicode(alloc, c, ranges, ignore_case_);
+                    CharacterRange::AddClassEscapeUnicode(c, ranges, ignore_case_, alloc);
                 else
-                    CharacterRange::AddClassEscape(alloc, c, ranges);
+                    CharacterRange::AddClassEscape(c, ranges, alloc);
                 RegExpTree* atom = alloc->newInfallible<RegExpCharacterClass>(ranges, false);
                 builder->AddAtom(atom);
                 break;
@@ -1751,7 +1751,7 @@ RegExpBuilder::FlushText()
     } else {
         RegExpText* text = alloc->newInfallible<RegExpText>(alloc);
         for (int i = 0; i < num_text; i++)
-            text_.Get(i)->AppendToText(text);
+            text_.Get(i)->AppendToText(text, alloc);
         terms_.Add(alloc, text);
     }
     text_.Clear();
