@@ -31,7 +31,6 @@
 #ifndef V8_JSREGEXP_H_
 #define V8_JSREGEXP_H_
 
-#include "ds/SplayTree.h"
 #include "irregexp/RegExpAST.h"
 #include "jit/Label.h"
 #include "vm/JSContext.h"
@@ -148,48 +147,6 @@ class OutSet
     RemainingVector* remaining_;
     OutSetVector* successors_;
     friend class Trace;
-};
-
-// A mapping from integers, specified as ranges, to a set of integers.
-// Used for mapping character ranges to choices.
-class DispatchTable
-{
-  public:
-    explicit DispatchTable(LifoAlloc* alloc)
-    {}
-
-    class Entry {
-      public:
-        Entry()
-          : from_(0), to_(0), out_set_(nullptr)
-        {}
-
-        Entry(char16_t from, char16_t to, OutSet* out_set)
-          : from_(from), to_(to), out_set_(out_set)
-        {}
-
-        char16_t from() { return from_; }
-        char16_t to() { return to_; }
-        void set_to(char16_t value) { to_ = value; }
-        void AddValue(LifoAlloc* alloc, int value) {
-            out_set_ = out_set_->Extend(alloc, value);
-        }
-        OutSet* out_set() { return out_set_; }
-      private:
-        char16_t from_;
-        char16_t to_;
-        OutSet* out_set_;
-    };
-
-    void AddRange(LifoAlloc* alloc, CharacterRange range, int value);
-    OutSet* Get(char16_t value);
-    void Dump();
-
-  private:
-    // There can't be a static empty set since it allocates its
-    // successors in a LifoAlloc and caches them.
-    OutSet* empty() { return &empty_; }
-    OutSet empty_;
 };
 
 class NodeVisitor;
@@ -824,7 +781,6 @@ class ChoiceNode : public RegExpNode
     explicit ChoiceNode(LifoAlloc* alloc, int expected_size)
       : RegExpNode(alloc),
         alternatives_(*alloc),
-        table_(nullptr),
         not_at_start_(false),
         being_calculated_(false)
     {
@@ -837,7 +793,6 @@ class ChoiceNode : public RegExpNode
     }
 
     GuardedAlternativeVector& alternatives() { return alternatives_; }
-    DispatchTable* GetTable(bool ignore_case);
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
     virtual int EatsAtLeast(int still_to_find, int budget, bool not_at_start);
     int EatsAtLeastHelper(int still_to_find,
@@ -876,7 +831,6 @@ class ChoiceNode : public RegExpNode
                                    AlternativeGeneration* alt_gen,
                                    int preload_characters,
                                    bool next_expects_preload);
-    DispatchTable* table_;
 
     // If true, this node is never checked at the start of the input.
     // Allows a new trace to start with at_start() set to false.
