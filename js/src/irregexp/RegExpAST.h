@@ -600,8 +600,7 @@ class RegExpBackReference final : public RegExpTree {
     int min_match() override { return 0; }
     // The back reference may be recursive, e.g. /(\2)(\1)/. To avoid infinite
     // recursion, we give up. Ignorance is bliss.
-    // FIXME(anba): Change to kInfinity per upstream.
-    int max_match() override { return capture_->max_match(); }
+    int max_match() override { return kInfinity; }
     int index() { return capture_->index(); }
     RegExpCapture* capture() { return capture_; }
     void set_capture(RegExpCapture* capture) { capture_ = capture; }
