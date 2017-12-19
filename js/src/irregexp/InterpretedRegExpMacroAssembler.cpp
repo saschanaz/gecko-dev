@@ -430,7 +430,7 @@ RegExpCode InterpretedRegExpMacroAssembler::GenerateCode(JSContext* cx, bool mat
     return res;
 }
 
-void InterpretedRegExpMacroAssembler::BindBacktrack(jit::Label* label) {
+void InterpretedRegExpMacroAssembler::BindBacktrack(Label* label) {
     Bind(label);
 }
 
