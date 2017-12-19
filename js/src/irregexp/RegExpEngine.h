@@ -463,16 +463,15 @@ class ActionNode : public SeqRegExpNode {
 
 class TextNode : public SeqRegExpNode {
   public:
-    TextNode(TextElementVector* elements,
+    TextNode(TextElementVector* elms,
              RegExpNode* on_success)
-      : SeqRegExpNode(on_success),
-        elements_(elements) {}
+      : SeqRegExpNode(on_success), elms_(elms) {}
 
     TextNode(RegExpCharacterClass* that,
              RegExpNode* on_success)
       : SeqRegExpNode(on_success),
-        elements_(alloc()->newInfallible<TextElementVector>(*alloc())) {
-        elements_->append(TextElement::CharClass(that));
+        elms_(alloc()->newInfallible<TextElementVector>(*alloc())) {
+        elms_->append(TextElement::CharClass(that));
     }
 
     virtual void Accept(NodeVisitor* visitor);
@@ -482,7 +481,7 @@ class TextNode : public SeqRegExpNode {
                                       RegExpCompiler* compiler,
                                       int characters_filled_in,
                                       bool not_at_start);
-    TextElementVector* elements() { return elements_; }
+    TextElementVector* elements() { return elms_; }
     void MakeCaseIndependent(bool is_one_byte, bool unicode);
     virtual int GreedyLoopTextLength();
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
@@ -511,7 +510,7 @@ class TextNode : public SeqRegExpNode {
                       bool first_element_checked,
                       int* checked_up_to);
     int Length();
-    TextElementVector* elements_;
+    TextElementVector* elms_;
 };
 
 class AssertionNode : public SeqRegExpNode {
@@ -574,8 +573,7 @@ class AssertionNode : public SeqRegExpNode {
 
 class BackReferenceNode : public SeqRegExpNode {
   public:
-    BackReferenceNode(int start_reg,
-                      int end_reg,
+    BackReferenceNode(int start_reg, int end_reg,
                       RegExpNode* on_success)
       : SeqRegExpNode(on_success),
         start_reg_(start_reg),
@@ -674,13 +672,11 @@ typedef InfallibleVector<Guard*, 1> GuardVector;
 
 class GuardedAlternative {
   public:
-    explicit GuardedAlternative(RegExpNode* node)
-      : node_(node), guards_(nullptr) {}
-
+    explicit GuardedAlternative(RegExpNode* node) : node_(node), guards_(nullptr) { }
     void AddGuard(LifoAlloc* alloc, Guard* guard);
-    RegExpNode* node() const { return node_; }
+    RegExpNode* node() { return node_; }
     void set_node(RegExpNode* node) { node_ = node; }
-    const GuardVector* guards() const { return guards_; }
+    GuardVector* guards() { return guards_; }
 
   private:
     RegExpNode* node_;
@@ -700,12 +696,10 @@ class ChoiceNode : public RegExpNode {
         being_calculated_(false) {
         alternatives_.reserve(expected_size);
     }
-
     virtual void Accept(NodeVisitor* visitor);
     void AddAlternative(GuardedAlternative node) {
         alternatives_.append(node);
     }
-
     GuardedAlternativeVector* alternatives() { return &alternatives_; }
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
     virtual int EatsAtLeast(int still_to_find, int budget, bool not_at_start);
@@ -724,7 +718,9 @@ class ChoiceNode : public RegExpNode {
     bool not_at_start() { return not_at_start_; }
     void set_not_at_start() { not_at_start_ = true; }
     void set_being_calculated(bool b) { being_calculated_ = b; }
-    virtual bool try_to_emit_quick_check_for_alternative(int i) { return true; }
+    virtual bool try_to_emit_quick_check_for_alternative(bool is_first) {
+        return true;
+    }
     virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
 
   protected:
@@ -750,11 +746,11 @@ class ChoiceNode : public RegExpNode {
     bool being_calculated_;
 };
 
-class NegativeLookaheadChoiceNode : public ChoiceNode {
+class NegativeLookaroundChoiceNode : public ChoiceNode {
   public:
-    explicit NegativeLookaheadChoiceNode(LifoAlloc* alloc,
-                                         GuardedAlternative this_must_fail,
-                                         GuardedAlternative then_do_this)
+    explicit NegativeLookaroundChoiceNode(LifoAlloc* alloc,
+                                          GuardedAlternative this_must_fail,
+                                          GuardedAlternative then_do_this)
       : ChoiceNode(alloc, 2) {
         AddAlternative(this_must_fail);
         AddAlternative(then_do_this);
@@ -772,15 +768,15 @@ class NegativeLookaheadChoiceNode : public ChoiceNode {
     // starts by loading enough characters for the alternative that takes fewest
     // characters, but on a negative lookahead the negative branch did not take
     // part in that calculation (EatsAtLeast) so the assumptions don't hold.
-    virtual bool try_to_emit_quick_check_for_alternative(int i) {
-        return i != 0;
+    virtual bool try_to_emit_quick_check_for_alternative(bool is_first) {
+        return !is_first;
     }
     virtual RegExpNode* FilterOneByte(int depth, bool ignore_case, bool unicode);
 };
 
 class LoopChoiceNode : public ChoiceNode {
   public:
-    explicit LoopChoiceNode(LifoAlloc* alloc, bool body_can_be_zero_length)
+    LoopChoiceNode(LifoAlloc* alloc, bool body_can_be_zero_length)
       : ChoiceNode(alloc, 2),
         loop_node_(nullptr),
         continue_node_(nullptr),
@@ -1077,9 +1073,7 @@ class Trace {
     }
 
     TriBool at_start() { return at_start_; }
-    void set_at_start(bool at_start) {
-        at_start_ = at_start ? TRUE_VALUE : FALSE_VALUE;
-    }
+    void set_at_start(TriBool at_start) { at_start_ = at_start; }
     jit::Label* backtrack() { return backtrack_; }
     jit::Label* loop_label() { return loop_label_; }
     RegExpNode* stop_node() { return stop_node_; }
@@ -1186,6 +1180,9 @@ class Analysis : public NodeVisitor {
         error_message_ = error_message;
     }
 
+    bool ignore_case() const { return ignore_case_; }
+    bool unicode() const { return unicode_; }
+
   private:
     JSContext* cx;
     bool ignore_case_;
@@ -1193,8 +1190,7 @@ class Analysis : public NodeVisitor {
     bool unicode_;
     const char* error_message_;
 
-    Analysis(Analysis&) = delete;
-    void operator=(Analysis&) = delete;
+    DISALLOW_IMPLICIT_CONSTRUCTORS(Analysis);
 };
 
 struct RegExpCompileData {

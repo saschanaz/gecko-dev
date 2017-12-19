@@ -52,7 +52,7 @@ FOR_EACH_REG_EXP_TREE_TYPE(MAKE_TYPE_CASE)
 FOR_EACH_REG_EXP_TREE_TYPE(MAKE_TYPE_CASE)
 #undef MAKE_TYPE_CASE
 
-static Interval ListCaptureRegisters(const RegExpTreeVector* children) {
+static Interval ListCaptureRegisters(RegExpTreeVector* children) {
     Interval result = Interval::Empty();
     for (size_t i = 0; i < children->length(); i++)
         result = result.Union(children->at(i)->CaptureRegisters());
@@ -67,7 +67,7 @@ Interval RegExpDisjunction::CaptureRegisters() {
     return ListCaptureRegisters(alternatives());
 }
 
-Interval RegExpLookahead::CaptureRegisters() {
+Interval RegExpLookaround::CaptureRegisters() {
     return body()->CaptureRegisters();
 }
 
@@ -89,7 +89,7 @@ bool RegExpAssertion::IsAnchoredAtEnd() {
 }
 
 bool RegExpAlternative::IsAnchoredAtStart() {
-    const RegExpTreeVector* nodes = this->nodes();
+    RegExpTreeVector* nodes = this->nodes();
     for (size_t i = 0; i < nodes->length(); i++) {
         RegExpTree* node = nodes->at(i);
         if (node->IsAnchoredAtStart()) {
@@ -103,7 +103,7 @@ bool RegExpAlternative::IsAnchoredAtStart() {
 }
 
 bool RegExpAlternative::IsAnchoredAtEnd() {
-    const RegExpTreeVector* nodes = this->nodes();
+    RegExpTreeVector* nodes = this->nodes();
     for (int i = nodes->length() - 1; i >= 0; i--) {
         RegExpTree* node = nodes->at(i);
         if (node->IsAnchoredAtEnd()) {
@@ -117,7 +117,7 @@ bool RegExpAlternative::IsAnchoredAtEnd() {
 }
 
 bool RegExpDisjunction::IsAnchoredAtStart() {
-    const RegExpTreeVector* alternatives = this->alternatives();
+    RegExpTreeVector* alternatives = this->alternatives();
     for (size_t i = 0; i < alternatives->length(); i++) {
         if (!alternatives->at(i)->IsAnchoredAtStart()) return false;
     }
@@ -125,14 +125,14 @@ bool RegExpDisjunction::IsAnchoredAtStart() {
 }
 
 bool RegExpDisjunction::IsAnchoredAtEnd() {
-    const RegExpTreeVector* alternatives = this->alternatives();
+    RegExpTreeVector* alternatives = this->alternatives();
     for (size_t i = 0; i < alternatives->length(); i++) {
         if (!alternatives->at(i)->IsAnchoredAtEnd()) return false;
     }
     return true;
 }
 
-bool RegExpLookahead::IsAnchoredAtStart() {
+bool RegExpLookaround::IsAnchoredAtStart() {
     return is_positive() && type() == LOOKAHEAD && body()->IsAnchoredAtStart();
 }
 
@@ -173,16 +173,4 @@ RegExpAlternative::RegExpAlternative(RegExpTreeVector* nodes)
         int node_max_match = node->max_match();
         max_match_ = IncreaseBy(max_match_, node_max_match);
     }
-}
-
-// ----------------------------------------------------------------------------
-
-CharacterRangeVector*
-CharacterSet::ranges(LifoAlloc* alloc)
-{
-    if (ranges_ == nullptr) {
-        ranges_ = alloc->newInfallible<CharacterRangeVector>(*alloc);
-        CharacterRange::AddClassEscape(alloc, standard_set_type_, ranges_);
-    }
-    return ranges_;
 }

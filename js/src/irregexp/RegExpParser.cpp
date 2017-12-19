@@ -74,7 +74,7 @@ RangeAtom(LifoAlloc* alloc, char16_t from, char16_t to)
 static inline RegExpTree*
 NegativeLookahead(LifoAlloc* alloc, char16_t from, char16_t to)
 {
-    return alloc->newInfallible<RegExpLookahead>(RangeAtom(alloc, from, to), false, 0, 0);
+    return alloc->newInfallible<RegExpLookaround>(RangeAtom(alloc, from, to), false, 0, 0);
 }
 
 class WideCharRange
@@ -803,7 +803,7 @@ RegExpParser<CharT>::ParseDisjunction()
                 DCHECK(group_type == POSITIVE_LOOKAHEAD ||
                        group_type == NEGATIVE_LOOKAHEAD);
                 bool is_positive = (group_type == POSITIVE_LOOKAHEAD);
-                body = alloc->newInfallible<RegExpLookahead>(body,
+                body = alloc->newInfallible<RegExpLookaround>(body,
                                                    is_positive,
                                                    end_capture_index - capture_index,
                                                    capture_index);

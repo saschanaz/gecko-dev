@@ -54,7 +54,7 @@ namespace irregexp {
   VISIT(Atom)                                                        \
   VISIT(Quantifier)                                                  \
   VISIT(Capture)                                                     \
-  VISIT(Lookahead)                                                   \
+  VISIT(Lookaround)                                                  \
   VISIT(BackReference)                                               \
   VISIT(Empty)                                                       \
   VISIT(Text)
@@ -159,7 +159,7 @@ class CharacterRange {
 
     // Whether a range list is in canonical form: Ranges ordered by from value,
     // and ranges non-overlapping and non-adjacent.
-    static bool IsCanonical(const CharacterRangeVector* ranges);
+    static bool IsCanonical(CharacterRangeVector* ranges);
 
     // Convert range list to canonical form. The characters covered by the ranges
     // will still be the same, but no character is in more than one range, and
@@ -168,7 +168,7 @@ class CharacterRange {
     static void Canonicalize(CharacterRangeVector* ranges);
 
     // Negate the contents of a character range in canonical form.
-    static void Negate(const LifoAlloc* alloc,
+    static void Negate(LifoAlloc* alloc,
                        CharacterRangeVector src,
                        CharacterRangeVector* dst);
 
@@ -286,7 +286,7 @@ class RegExpDisjunction final : public RegExpTree {
     int min_match() override { return min_match_; }
     int max_match() override { return max_match_; }
 
-    const RegExpTreeVector* alternatives() { return alternatives_; }
+    RegExpTreeVector* alternatives() { return alternatives_; }
 
   private:
     bool SortConsecutiveAtoms(RegExpCompiler* compiler);
@@ -310,7 +310,7 @@ class RegExpAlternative final : public RegExpTree {
     int min_match() override { return min_match_; }
     int max_match() override { return max_match_; }
 
-    const RegExpTreeVector* nodes() { return nodes_; }
+    RegExpTreeVector* nodes() { return nodes_; }
 
   private:
     RegExpTreeVector* nodes_;
@@ -416,7 +416,7 @@ class RegExpAtom final : public RegExpTree {
     int max_match() override { return data_->length(); }
     void AppendToText(RegExpText* text) override;
 
-    const CharacterVector& data() { return *data_; }
+    CharacterVector& data() { return *data_; }
     int length() { return data_->length(); }
 
   private:
@@ -515,12 +515,12 @@ class RegExpCapture final : public RegExpTree {
     int index_;
 };
 
-class RegExpLookahead final : public RegExpTree {
+class RegExpLookaround final : public RegExpTree {
   public:
     enum Type { LOOKAHEAD };
 
-    RegExpLookahead(RegExpTree* body, bool is_positive, int capture_count,
-                    int capture_from)
+    RegExpLookaround(RegExpTree* body, bool is_positive, int capture_count,
+                     int capture_from)
       : body_(body),
         is_positive_(is_positive),
         capture_count_(capture_count),
@@ -529,9 +529,9 @@ class RegExpLookahead final : public RegExpTree {
 
     void* Accept(RegExpVisitor* visitor, void* data) override;
     RegExpNode* ToNode(RegExpCompiler* compiler, RegExpNode* on_success) override;
-    RegExpLookahead* AsLookahead() override;
+    RegExpLookaround* AsLookaround() override;
     Interval CaptureRegisters() override;
-    bool IsLookahead() override;
+    bool IsLookaround() override;
     bool IsAnchoredAtStart() override;
     int min_match() override { return 0; }
     int max_match() override { return 0; }
