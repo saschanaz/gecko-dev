@@ -90,7 +90,7 @@ class MOZ_STACK_CLASS InterpretedRegExpMacroAssembler final : public RegExpMacro
     virtual void CheckCharacterLT(uc16 limit, Label* on_less);
     virtual void CheckGreedyLoop(Label* on_tos_equals_current_position);
     virtual void CheckAtStart(Label* on_at_start);
-    virtual void CheckNotAtStart(Label* on_not_at_start);
+    virtual void CheckNotAtStart(int cp_offset, Label* on_not_at_start);
     virtual void CheckNotCharacter(unsigned c, Label* on_not_equal);
     virtual void CheckNotCharacterAfterAnd(unsigned c,
                                            unsigned mask,
@@ -106,10 +106,11 @@ class MOZ_STACK_CLASS InterpretedRegExpMacroAssembler final : public RegExpMacro
                                           uc16 to,
                                           Label* on_not_in_range);
     virtual void CheckBitInTable(RegExpShared::JitCodeTable table, Label* on_bit_set);
-    virtual void CheckNotBackReference(int start_reg,
+    virtual void CheckNotBackReference(int start_reg, bool read_backward,
                                        Label* on_no_match);
     virtual void CheckNotBackReferenceIgnoreCase(int start_reg,
-                                                 bool unicode, Label* on_no_match);
+                                                 bool read_backward, bool unicode,
+                                                 Label* on_no_match);
     virtual void IfRegisterLT(int register_index, int comparand, Label* if_lt);
     virtual void IfRegisterGE(int register_index, int comparand, Label* if_ge);
     virtual void IfRegisterEqPos(int register_index, Label* if_eq);

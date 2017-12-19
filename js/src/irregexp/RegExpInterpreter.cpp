@@ -302,6 +302,7 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
           }
           BYTECODE(LOAD_2_CURRENT_CHARS_UNCHECKED) {
             int pos = current + (insn >> BYTECODE_SHIFT);
+            // TODO(anba): Use CharT instead of char16_t?
             char16_t next = subject[pos + 1];
             current_char = (subject[pos] | (next << (kBitsPerByte * sizeof(char16_t))));
             pc += BC_LOAD_2_CURRENT_CHARS_UNCHECKED_LENGTH;
@@ -487,7 +488,19 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             break;
           }
           BYTECODE(CHECK_NOT_BACK_REF_BACKWARD) {
-            MOZ_CRASH("backward reading not implemented");
+            int from = registers[insn >> BYTECODE_SHIFT];
+            int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
+            if (from >= 0 && len > 0) {
+                // TODO(anba): current is size_t for SM, but int for V8.
+                if (current - len < 0 ||
+                    ::CompareChars(subject + from, subject + (current - len), len) != 0) {
+                    pc = code_base + Load32Aligned(pc + 4);
+                    break;
+                }
+                current -= len;
+            }
+            pc += BC_CHECK_NOT_BACK_REF_BACKWARD_LENGTH;
+            break;
           }
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_UNICODE)
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE) {
@@ -509,7 +522,22 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
           }
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_UNICODE_BACKWARD)
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_BACKWARD) {
-            MOZ_CRASH("backward reading not implemented");
+            bool unicode = (insn & BYTECODE_MASK) ==
+                           BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE_BACKWARD;
+            int from = registers[insn >> BYTECODE_SHIFT];
+            int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
+            if (from >= 0 && len > 0) {
+                // TODO(anba): current is size_t for SM, but int for V8.
+                if (current - len < 0 ||
+                    !BackRefMatchesNoCase(from, current - len, len, subject,
+                                          unicode)) {
+                    pc = code_base + Load32Aligned(pc + 4);
+                    break;
+                }
+                current -= len;
+            }
+            pc += BC_CHECK_NOT_BACK_REF_NO_CASE_BACKWARD_LENGTH;
+            break;
           }
           BYTECODE(CHECK_AT_START)
             if (current == 0) {
@@ -519,7 +547,7 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             }
             break;
           BYTECODE(CHECK_NOT_AT_START)
-            if (current == 0) {
+            if (current + (insn >> BYTECODE_SHIFT) == 0) {
                 pc += BC_CHECK_NOT_AT_START_LENGTH;
             } else {
                 pc = code_base + Load32Aligned(pc + 4);

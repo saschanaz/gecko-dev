@@ -66,6 +66,7 @@
 #include "vm/JSContext-inl.h"
 #include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
+#include "vm/Unicode.h"
 
 using namespace js;
 
@@ -4543,8 +4544,16 @@ ConvertRegExpTreeToObject(JSContext* cx, irregexp::RegExpTree* tree)
                 return false;
 
             auto CharProp = [](JSContext* cx, HandleObject obj,
-                               const char* name, char16_t c) {
-                RootedString valueStr(cx, JS_NewUCStringCopyN(cx, &c, 1));
+                               const char* name, char32_t c) {
+                RootedString valueStr(cx);
+                if (!unicode::IsSupplementary(c)) {
+                    char16_t cu = static_cast<char16_t>(c);
+                    valueStr = JS_NewUCStringCopyN(cx, &cu, 1);
+                } else {
+                    char16_t surrogatePair[2];
+                    unicode::UTF16Encode(c, &surrogatePair[0], &surrogatePair[1]);
+                    valueStr = JS_NewUCStringCopyN(cx, surrogatePair, 2);
+                }
                 if (!valueStr)
                     return false;
                 RootedValue val(cx, StringValue(valueStr));

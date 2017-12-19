@@ -172,7 +172,7 @@ class CharacterRange {
 
     // Negate the contents of a character range in canonical form.
     static void Negate(CharacterRangeVector* src,
-                       CharacterRangeVector* dst);
+                       CharacterRangeVector* dst, Zone* zone);
 
     static const int kStartMarker = (1 << 24);
     static const int kPayloadMask = (1 << 24) - 1;
@@ -531,7 +531,7 @@ class RegExpGroup final : public RegExpTree {
 
 class RegExpLookaround final : public RegExpTree {
   public:
-    enum Type { LOOKAHEAD };
+    enum Type { LOOKAHEAD, LOOKBEHIND };
 
     RegExpLookaround(RegExpTree* body, bool is_positive, int capture_count,
                      int capture_from, Type type)

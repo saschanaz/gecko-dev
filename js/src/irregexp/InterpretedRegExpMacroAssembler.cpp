@@ -276,9 +276,9 @@ void InterpretedRegExpMacroAssembler::CheckAtStart(Label* on_at_start) {
     EmitOrLink(on_at_start);
 }
 
-void InterpretedRegExpMacroAssembler::CheckNotAtStart(
+void InterpretedRegExpMacroAssembler::CheckNotAtStart(int cp_offset,
                                                       Label* on_not_at_start) {
-    Emit(BC_CHECK_NOT_AT_START, 0);
+    Emit(BC_CHECK_NOT_AT_START, cp_offset);
     EmitOrLink(on_not_at_start);
 }
 
@@ -368,20 +368,23 @@ void InterpretedRegExpMacroAssembler::CheckBitInTable(
 }
 
 void InterpretedRegExpMacroAssembler::CheckNotBackReference(int start_reg,
+                                                            bool read_backward,
                                                             Label* on_not_equal) {
     DCHECK(start_reg >= 0);
     DCHECK(start_reg <= kMaxRegister);
-    Emit(BC_CHECK_NOT_BACK_REF,
+    Emit(read_backward ? BC_CHECK_NOT_BACK_REF_BACKWARD : BC_CHECK_NOT_BACK_REF,
          start_reg);
     EmitOrLink(on_not_equal);
 }
 
 void InterpretedRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(
-        int start_reg, bool unicode, Label* on_not_equal) {
+        int start_reg, bool read_backward, bool unicode, Label* on_not_equal) {
     DCHECK(start_reg >= 0);
     DCHECK(start_reg <= kMaxRegister);
-    Emit((unicode ? BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE
-                  : BC_CHECK_NOT_BACK_REF_NO_CASE),
+    Emit(read_backward ? (unicode ? BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE_BACKWARD
+                                  : BC_CHECK_NOT_BACK_REF_NO_CASE_BACKWARD)
+                       : (unicode ? BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE
+                                  : BC_CHECK_NOT_BACK_REF_NO_CASE),
          start_reg);
     EmitOrLink(on_not_equal);
 }

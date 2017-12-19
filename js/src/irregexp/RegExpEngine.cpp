@@ -365,6 +365,8 @@ class irregexp::RegExpCompiler {
         return unicode() && ignore_case();
     }
     inline bool one_byte() { return one_byte_; }
+    bool read_backward() { return read_backward_; }
+    void set_read_backward(bool value) { read_backward_ = value; }
     FrequencyCollator* frequency_collator() { return &frequency_collator_; }
 
     int current_expansion_factor() { return current_expansion_factor_; }
@@ -392,6 +394,7 @@ class irregexp::RegExpCompiler {
     bool one_byte_;
     bool match_only_;
     bool reg_exp_too_big_;
+    bool read_backward_;
     int current_expansion_factor_;
     FrequencyCollator frequency_collator_;
     JSContext* cx_;
@@ -422,6 +425,7 @@ RegExpCompiler::RegExpCompiler(JSContext* cx, Zone* zone, int capture_count,
     one_byte_(one_byte),
     match_only_(match_only),
     reg_exp_too_big_(false),
+    read_backward_(false),
     current_expansion_factor_(1),
     frequency_collator_(),
     cx_(cx),
@@ -1571,6 +1575,7 @@ static void EmitCharClass(RegExpMacroAssembler* macro_assembler,
         }
         return;
     }
+    // TODO(anba): Removed in https://github.com/v8/v8/commit/ea820ad5fa282a323a86fe20e64f83ee67ba5f04
     if (last_valid_range == 0 &&
         !cc->is_negated() &&
         ranges->at(0).IsEverything(max_char)) {
@@ -1729,6 +1734,7 @@ bool AssertionNode::FillInBMInfo(int offset, int budget,
 int BackReferenceNode::EatsAtLeast(int still_to_find,
                                    int budget,
                                    bool not_at_start) {
+    if (read_backward()) return 0;
     if (budget <= 0) return 0;
     return on_success()->EatsAtLeast(still_to_find,
                                      budget - 1,
@@ -1738,6 +1744,7 @@ int BackReferenceNode::EatsAtLeast(int still_to_find,
 int TextNode::EatsAtLeast(int still_to_find,
                           int budget,
                           bool not_at_start) {
+    if (read_backward()) return 0;
     int answer = Length();
     if (answer >= still_to_find) return answer;
     if (budget <= 0) return answer;
@@ -1915,6 +1922,9 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                                     RegExpCompiler* compiler,
                                     int characters_filled_in,
                                     bool not_at_start) {
+    // Do not collect any quick check details if the text node reads backward,
+    // since it reads in the opposite direction than we use for quick checks.
+    if (read_backward()) return;
     DCHECK(characters_filled_in < details->characters());
     int characters = details->characters();
     int char_mask;
@@ -2073,11 +2083,13 @@ void QuickCheckDetails::Clear() {
 }
 
 void QuickCheckDetails::Advance(int by, bool one_byte) {
-    MOZ_ASSERT(by >= 0);
-    if (by >= characters_) {
+    if (by >= characters_ || by < 0) {
+        DCHECK_IMPLIES(by < 0, characters_ == 0);
         Clear();
         return;
     }
+    DCHECK_LE(characters_ - by, 4);
+    DCHECK_LE(characters_, 4);
     for (int i = 0; i < characters_ - by; i++) {
         positions_[i] = positions_[by + i];
     }
@@ -2525,7 +2537,7 @@ void AssertionNode::Emit(RegExpCompiler* compiler, Trace* trace) {
             return;
         }
         if (trace->at_start() == Trace::UNKNOWN) {
-            assembler->CheckNotAtStart(trace->backtrack());
+            assembler->CheckNotAtStart(trace->cp_offset(), trace->backtrack());
             Trace at_start_trace = *trace;
             at_start_trace.set_at_start(Trace::TRUE_VALUE);
             on_success()->Emit(compiler, &at_start_trace);
@@ -2613,9 +2625,10 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
     Label* backtrack = trace->backtrack();
     QuickCheckDetails* quick_check = trace->quick_check_performed();
     int element_count = elements()->length();
+    int backward_offset = read_backward() ? -Length() : 0;
     for (int i = preloaded ? 0 : element_count - 1; i >= 0; i--) {
         TextElement elm = elements()->at(i);
-        int cp_offset = trace->cp_offset() + elm.cp_offset();
+        int cp_offset = trace->cp_offset() + elm.cp_offset() + backward_offset;
         if (elm.text_type() == TextElement::ATOM) {
             CharacterVector& quarks = elm.atom()->data();
             for (int j = preloaded ? 0 : quarks.length() - 1; j >= 0; j--) {
@@ -2646,7 +2659,7 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
                     // emit_function is a function pointer. Suppress static
                     // analysis false positives.
                     JS::AutoSuppressGCAnalysis suppress;
-                    bool bounds_check = *checked_up_to < cp_offset + j;
+                    bool bounds_check = *checked_up_to < cp_offset + j || read_backward();
                     bool bound_checked =
                         emit_function(compiler, quarks[j], backtrack,
                                       cp_offset + j, bounds_check, preloaded);
@@ -2659,7 +2672,7 @@ void TextNode::TextEmitPass(RegExpCompiler* compiler,
                 if (first_element_checked && i == 0) continue;
                 if (DeterminedAlready(quick_check, elm.cp_offset())) continue;
                 RegExpCharacterClass* cc = elm.char_class();
-                bool bounds_check = *checked_up_to < cp_offset;
+                bool bounds_check = *checked_up_to < cp_offset || read_backward();
                 EmitCharClass(assembler, cc, one_byte, backtrack, cp_offset,
                               bounds_check, preloaded, zone());
                 UpdateBoundsCheck(cp_offset, checked_up_to);
@@ -2685,16 +2698,18 @@ bool TextNode::SkipPass(int int_pass, bool ignore_case) {
 
 TextNode* TextNode::CreateForCharacterRanges(Zone* zone,
                                              CharacterRangeVector* ranges,
+                                             bool read_backward,
                                              RegExpNode* on_success) {
     DCHECK_NOT_NULL(ranges);
     TextElementVector* elms = zone->newInfallible<TextElementVector>(*zone);
     elms->append(TextElement::CharClass(zone->newInfallible<RegExpCharacterClass>(ranges)));
-    return zone->newInfallible<TextNode>(elms, on_success);
+    return zone->newInfallible<TextNode>(elms, read_backward, on_success);
 }
 
 
 TextNode* TextNode::CreateForSurrogatePair(Zone* zone, CharacterRange lead,
                                            CharacterRange trail,
+                                           bool read_backward,
                                            RegExpNode* on_success) {
     CharacterRangeVector* lead_ranges = CharacterRange::List(zone, lead);
     CharacterRangeVector* trail_ranges = CharacterRange::List(zone, trail);
@@ -2703,7 +2718,7 @@ TextNode* TextNode::CreateForSurrogatePair(Zone* zone, CharacterRange lead,
         TextElement::CharClass(zone->newInfallible<RegExpCharacterClass>(lead_ranges)));
     elms->append(
         TextElement::CharClass(zone->newInfallible<RegExpCharacterClass>(trail_ranges)));
-    return zone->newInfallible<TextNode>(elms, on_success);
+    return zone->newInfallible<TextNode>(elms, read_backward, on_success);
 }
 
 // This generates the code to match a text node.  A text node can contain
@@ -2759,8 +2774,11 @@ void TextNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     }
 
     Trace successor_trace(*trace);
-    successor_trace.set_at_start(Trace::FALSE_VALUE);
-    successor_trace.AdvanceCurrentPositionInTrace(Length(), compiler);
+    // If we advance backward, we may end up at the start.
+    successor_trace.AdvanceCurrentPositionInTrace(
+        read_backward() ? -Length() : Length(), compiler);
+    successor_trace.set_at_start(read_backward() ? Trace::UNKNOWN
+                                                 : Trace::FALSE_VALUE);
     RecursionCheck rc(compiler);
     on_success()->Emit(compiler, &successor_trace);
 }
@@ -2770,7 +2788,6 @@ void Trace::InvalidateCurrentCharacter() {
 }
 
 void Trace::AdvanceCurrentPositionInTrace(int by, RegExpCompiler* compiler) {
-    MOZ_ASSERT(by > 0);
     // We don't have an instruction for shifting the current character register
     // down or for using a shifted value for anything so lets just forget that
     // we preloaded any characters into it.
@@ -2806,6 +2823,7 @@ int TextNode::GreedyLoopTextLength() { return Length(); }
 
 RegExpNode* TextNode::GetSuccessorOfOmnivorousTextNode(
         RegExpCompiler* compiler) {
+    if (read_backward()) return NULL;
     if (elements()->length() != 1) return NULL;
     TextElement elm = elements()->at(0);
     if (elm.text_type() != TextElement::CHAR_CLASS) return NULL;
@@ -2849,7 +2867,7 @@ int ChoiceNode::GreedyLoopTextLengthForAlternative(
         SeqRegExpNode* seq_node = static_cast<SeqRegExpNode*>(node);
         node = seq_node->on_success();
     }
-    return length;
+    return read_backward() ? -length : length;
 }
 
 void LoopChoiceNode::AddLoopAlternative(GuardedAlternative alt) {
@@ -3662,11 +3680,13 @@ void BackReferenceNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     DCHECK_EQ(start_reg_ + 1, end_reg_);
     if (compiler->ignore_case()) {
         assembler->CheckNotBackReferenceIgnoreCase(
-            start_reg_, compiler->unicode(), trace->backtrack());
+            start_reg_, read_backward(), compiler->unicode(), trace->backtrack());
     } else {
-        assembler->CheckNotBackReference(start_reg_,
+        assembler->CheckNotBackReference(start_reg_, read_backward(),
                                          trace->backtrack());
     }
+    // We are going to advance backward, so we may end up at the start.
+    if (read_backward()) trace->set_at_start(Trace::UNKNOWN);
 
     // Check that the back reference does not end inside a surrogate pair.
     if (compiler->unicode() && !compiler->one_byte()) {
@@ -3683,12 +3703,12 @@ RegExpNode* RegExpAtom::ToNode(RegExpCompiler* compiler,
     TextElementVector* elms =
         compiler->zone()->newInfallible<TextElementVector>(*compiler->zone());
     elms->append(TextElement::Atom(this));
-    return compiler->zone()->newInfallible<TextNode>(elms, on_success);
+    return compiler->zone()->newInfallible<TextNode>(elms, compiler->read_backward(), on_success);
 }
 
 RegExpNode* RegExpText::ToNode(RegExpCompiler* compiler,
                                RegExpNode* on_success) {
-    return compiler->zone()->newInfallible<TextNode>(elements(), on_success);
+    return compiler->zone()->newInfallible<TextNode>(elements(), compiler->read_backward(), on_success);
 }
 
 static bool CompareInverseRanges(CharacterRangeVector* ranges,
@@ -3853,7 +3873,7 @@ void AddBmpCharacters(RegExpCompiler* compiler, ChoiceNode* result,
     CharacterRangeVector* bmp = splitter->bmp();
     if (bmp == nullptr) return;
     result->AddAlternative(GuardedAlternative(TextNode::CreateForCharacterRanges(
-        compiler->zone(), bmp, on_success)));
+        compiler->zone(), bmp, compiler->read_backward(), on_success)));
 }
 
 void AddNonBmpSurrogatePairs(RegExpCompiler* compiler, ChoiceNode* result,
@@ -3882,7 +3902,7 @@ void AddNonBmpSurrogatePairs(RegExpCompiler* compiler, ChoiceNode* result,
             result->AddAlternative(
                 GuardedAlternative(TextNode::CreateForSurrogatePair(
                     zone, CharacterRange::Singleton(from_l),
-                    CharacterRange::Range(from_t, to_t),
+                    CharacterRange::Range(from_t, to_t), compiler->read_backward(),
                     on_success)));
         } else {
             if (from_t != kTrailSurrogateStart) {
@@ -3891,7 +3911,7 @@ void AddNonBmpSurrogatePairs(RegExpCompiler* compiler, ChoiceNode* result,
                     GuardedAlternative(TextNode::CreateForSurrogatePair(
                         zone, CharacterRange::Singleton(from_l),
                         CharacterRange::Range(from_t, kTrailSurrogateEnd),
-                        on_success)));
+                        compiler->read_backward(), on_success)));
                 from_l++;
             }
             if (to_t != kTrailSurrogateEnd) {
@@ -3900,7 +3920,7 @@ void AddNonBmpSurrogatePairs(RegExpCompiler* compiler, ChoiceNode* result,
                     GuardedAlternative(TextNode::CreateForSurrogatePair(
                         zone, CharacterRange::Singleton(to_l),
                         CharacterRange::Range(kTrailSurrogateStart, to_t),
-                        on_success)));
+                        compiler->read_backward(), on_success)));
                 to_l--;
             }
             if (from_l <= to_l) {
@@ -3909,7 +3929,7 @@ void AddNonBmpSurrogatePairs(RegExpCompiler* compiler, ChoiceNode* result,
                     GuardedAlternative(TextNode::CreateForSurrogatePair(
                         zone, CharacterRange::Range(from_l, to_l),
                         CharacterRange::Range(kTrailSurrogateStart, kTrailSurrogateEnd),
-                        on_success)));
+                        compiler->read_backward(), on_success)));
             }
         }
     }
@@ -3917,31 +3937,33 @@ void AddNonBmpSurrogatePairs(RegExpCompiler* compiler, ChoiceNode* result,
 
 RegExpNode* NegativeLookaroundAgainstReadDirectionAndMatch(
         RegExpCompiler* compiler, CharacterRangeVector* lookbehind,
-        CharacterRangeVector* match, RegExpNode* on_success) {
+        CharacterRangeVector* match, RegExpNode* on_success,
+        bool read_backward) {
     irregexp::Zone* zone = compiler->zone();
     RegExpNode* match_node = TextNode::CreateForCharacterRanges(
-        zone, match, on_success);
+        zone, match, read_backward, on_success);
     int stack_register = compiler->UnicodeLookaroundStackRegister();
     int position_register = compiler->UnicodeLookaroundPositionRegister();
     RegExpLookaround::Builder lookaround(false, match_node, stack_register,
                                          position_register);
     RegExpNode* negative_match = TextNode::CreateForCharacterRanges(
-        zone, lookbehind, lookaround.on_match_success());
+        zone, lookbehind, !read_backward, lookaround.on_match_success());
     return lookaround.ForMatch(negative_match);
 }
 
 RegExpNode* MatchAndNegativeLookaroundInReadDirection(
         RegExpCompiler* compiler, CharacterRangeVector* match,
-        CharacterRangeVector* lookahead, RegExpNode* on_success) {
+        CharacterRangeVector* lookahead, RegExpNode* on_success,
+        bool read_backward) {
     irregexp::Zone* zone = compiler->zone();
     int stack_register = compiler->UnicodeLookaroundStackRegister();
     int position_register = compiler->UnicodeLookaroundPositionRegister();
     RegExpLookaround::Builder lookaround(false, on_success, stack_register,
                                          position_register);
     RegExpNode* negative_match = TextNode::CreateForCharacterRanges(
-        zone, lookahead, lookaround.on_match_success());
+        zone, lookahead, read_backward, lookaround.on_match_success());
     return TextNode::CreateForCharacterRanges(
-        zone, match, lookaround.ForMatch(negative_match));
+        zone, match, read_backward, lookaround.ForMatch(negative_match));
 }
 
 void AddLoneLeadSurrogates(RegExpCompiler* compiler, ChoiceNode* result,
@@ -3955,10 +3977,17 @@ void AddLoneLeadSurrogates(RegExpCompiler* compiler, ChoiceNode* result,
         zone, CharacterRange::Range(kTrailSurrogateStart, kTrailSurrogateEnd));
 
     RegExpNode* match;
-    // Reading forward. Forward match the lead surrogate and assert that
-    // no trail surrogate follows.
-    match = MatchAndNegativeLookaroundInReadDirection(
-        compiler, lead_surrogates, trail_surrogates, on_success);
+    if (compiler->read_backward()) {
+        // Reading backward. Assert that reading forward, there is no trail
+        // surrogate, and then backward match the lead surrogate.
+        match = NegativeLookaroundAgainstReadDirectionAndMatch(
+            compiler, trail_surrogates, lead_surrogates, on_success, true);
+    } else {
+        // Reading forward. Forward match the lead surrogate and assert that
+        // no trail surrogate follows.
+        match = MatchAndNegativeLookaroundInReadDirection(
+            compiler, lead_surrogates, trail_surrogates, on_success, false);
+    }
     result->AddAlternative(GuardedAlternative(match));
 }
 
@@ -3973,16 +4002,24 @@ void AddLoneTrailSurrogates(RegExpCompiler* compiler, ChoiceNode* result,
         zone, CharacterRange::Range(kLeadSurrogateStart, kLeadSurrogateEnd));
 
     RegExpNode* match;
-    // Reading forward. Assert that reading backward, there is no lead
-    // surrogate, and then forward match the trail surrogate.
-    match = NegativeLookaroundAgainstReadDirectionAndMatch(
-        compiler, lead_surrogates, trail_surrogates, on_success);
+    if (compiler->read_backward()) {
+        // Reading backward. Backward match the trail surrogate and assert that no
+        // lead surrogate precedes it.
+        match = MatchAndNegativeLookaroundInReadDirection(
+            compiler, trail_surrogates, lead_surrogates, on_success, true);
+    } else {
+        // Reading forward. Assert that reading backward, there is no lead
+        // surrogate, and then forward match the trail surrogate.
+        match = NegativeLookaroundAgainstReadDirectionAndMatch(
+            compiler, lead_surrogates, trail_surrogates, on_success, false);
+    }
     result->AddAlternative(GuardedAlternative(match));
 }
 
 RegExpNode* UnanchoredAdvance(RegExpCompiler* compiler,
                               RegExpNode* on_success) {
     // This implements ES2015 21.2.5.2.3, AdvanceStringIndex.
+    DCHECK(!compiler->read_backward());
     irregexp::Zone* zone = compiler->zone();
     // Advance any character. If the character happens to be a lead surrogate and
     // we advanced into the middle of a surrogate pair, it will work out, as
@@ -3990,7 +4027,7 @@ RegExpNode* UnanchoredAdvance(RegExpCompiler* compiler,
     // the associated trail surrogate.
     CharacterRangeVector* range = CharacterRange::List(
         zone, CharacterRange::Range(0, String::kMaxUtf16CodeUnit));
-    return TextNode::CreateForCharacterRanges(zone, range, on_success);
+    return TextNode::CreateForCharacterRanges(zone, range, false, on_success);
 }
 
 static void AddUnicodeCaseEquivalents(CharacterRangeVector* ranges, irregexp::Zone* zone) {
@@ -4046,7 +4083,40 @@ static void AddUnicodeCaseEquivalents(CharacterRangeVector* ranges, irregexp::Zo
 
 RegExpNode* RegExpCharacterClass::ToNode(RegExpCompiler* compiler,
                                          RegExpNode* on_success) {
-    return compiler->zone()->newInfallible<TextNode>(this, on_success);
+    set_.Canonicalize();
+    Zone* zone = compiler->zone();
+    CharacterRangeVector* ranges = this->ranges(zone);
+    if (compiler->needs_unicode_case_equivalents()) {
+        AddUnicodeCaseEquivalents(ranges, zone);
+    }
+    if (compiler->unicode() && !compiler->one_byte() &&
+        !contains_split_surrogate()) {
+        if (is_negated()) {
+            CharacterRangeVector* negated =
+                zone->newInfallible<CharacterRangeVector>(*zone);
+            CharacterRange::Negate(ranges, negated, zone);
+            ranges = negated;
+        }
+        if (ranges->length() == 0) {
+            ranges->append(CharacterRange::Everything());
+            RegExpCharacterClass* fail =
+                zone->newInfallible<RegExpCharacterClass>(ranges, NEGATED);
+            return zone->newInfallible<TextNode>(fail, compiler->read_backward(), on_success);
+        }
+        if (standard_type() == '*') {
+            return UnanchoredAdvance(compiler, on_success);
+        } else {
+            ChoiceNode* result = zone->newInfallible<ChoiceNode>(2, zone);
+            UnicodeRangeSplitter splitter(zone, ranges);
+            AddBmpCharacters(compiler, result, on_success, &splitter);
+            AddNonBmpSurrogatePairs(compiler, result, on_success, &splitter);
+            AddLoneLeadSurrogates(compiler, result, on_success, &splitter);
+            AddLoneTrailSurrogates(compiler, result, on_success, &splitter);
+            return result;
+        }
+    } else {
+        return zone->newInfallible<TextNode>(this, compiler->read_backward(), on_success);
+    }
 }
 
 RegExpNode* RegExpDisjunction::ToNode(RegExpCompiler* compiler,
@@ -4054,7 +4124,7 @@ RegExpNode* RegExpDisjunction::ToNode(RegExpCompiler* compiler,
     if (!compiler->CheckOverRecursed())
         return on_success;
 
-    const RegExpTreeVector* alternatives = this->alternatives();
+    RegExpTreeVector* alternatives = this->alternatives();
 
     int length = alternatives->length();
 
@@ -4196,7 +4266,7 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
                             GuardedAlternative(body->ToNode(compiler, answer)));
                     }
                     answer = alternation;
-                    if (not_at_start) {
+                    if (not_at_start && !compiler->read_backward()) {
                         alternation->set_not_at_start();
                     }
                 }
@@ -4210,8 +4280,9 @@ RegExpNode* RegExpQuantifier::ToNode(int min,
     int reg_ctr = needs_counter
         ? compiler->AllocateRegister()
         : RegExpCompiler::kNoRegister;
-    LoopChoiceNode* center = zone->newInfallible<LoopChoiceNode>(body->min_match() == 0, zone);
-    if (not_at_start) center->set_not_at_start();
+    LoopChoiceNode* center =
+        zone->newInfallible<LoopChoiceNode>(body->min_match() == 0, compiler->read_backward(), zone);
+    if (not_at_start && !compiler->read_backward()) center->set_not_at_start();
     RegExpNode* loop_return = needs_counter
         ? static_cast<RegExpNode*>(ActionNode::IncrementRegister(reg_ctr, center))
         : static_cast<RegExpNode*>(center);
@@ -4265,12 +4336,33 @@ RegExpNode* BoundaryAssertionAsLookaround(RegExpCompiler* compiler,
                                           RegExpNode* on_success,
                                           RegExpAssertion::AssertionType type) {
     DCHECK(compiler->needs_unicode_case_equivalents());
-
-    // FIXME(anba): Requires lookbehind support.
-    if (type == RegExpAssertion::BOUNDARY)
-        return AssertionNode::AtBoundary(on_success);
-    else
-        return AssertionNode::AtNonBoundary(on_success);
+    irregexp::Zone* zone = compiler->zone();
+    CharacterRangeVector* word_range =
+        zone->newInfallible<CharacterRangeVector>(*zone);
+    CharacterRange::AddClassEscape('w', word_range, true, zone);
+    int stack_register = compiler->UnicodeLookaroundStackRegister();
+    int position_register = compiler->UnicodeLookaroundPositionRegister();
+    ChoiceNode* result = zone->newInfallible<ChoiceNode>(2, zone);
+    // Add two choices. The (non-)boundary could start with a word or
+    // a non-word-character.
+    for (int i = 0; i < 2; i++) {
+        bool lookbehind_for_word = i == 0;
+        bool lookahead_for_word =
+            (type == RegExpAssertion::BOUNDARY) ^ lookbehind_for_word;
+        // Look to the left.
+        RegExpLookaround::Builder lookbehind(lookbehind_for_word, on_success,
+                                             stack_register, position_register);
+        RegExpNode* backward = TextNode::CreateForCharacterRanges(
+            zone, word_range, true, lookbehind.on_match_success());
+        // Look to the right.
+        RegExpLookaround::Builder lookahead(lookahead_for_word,
+                                            lookbehind.ForMatch(backward),
+                                            stack_register, position_register);
+        RegExpNode* forward = TextNode::CreateForCharacterRanges(
+            zone, word_range, false, lookahead.on_match_success());
+        result->AddAlternative(GuardedAlternative(lookahead.ForMatch(forward)));
+  }
+  return result;
 }
 }  // anonymous namespace
 
@@ -4306,14 +4398,14 @@ RegExpNode* RegExpAssertion::ToNode(RegExpCompiler* compiler,
         // Create a newline atom.
         CharacterRangeVector* newline_ranges =
             zone->newInfallible<CharacterRangeVector>(*zone);
-        CharacterRange::AddClassEscape('n', newline_ranges, zone);
+        CharacterRange::AddClassEscape('n', newline_ranges, false, zone);
         RegExpCharacterClass* newline_atom = zone->newInfallible<RegExpCharacterClass>('n');
         TextNode* newline_matcher = zone->newInfallible<TextNode>(
-                newline_atom, ActionNode::PositiveSubmatchSuccess(
-                                    stack_pointer_register, position_register,
-                                    0,  // No captures inside.
-                                    -1,  // Ignored if no captures.
-                                    on_success));
+                newline_atom, false, ActionNode::PositiveSubmatchSuccess(
+                                         stack_pointer_register, position_register,
+                                         0,  // No captures inside.
+                                         -1,  // Ignored if no captures.
+                                         on_success));
         // Create an end-of-input matcher.
         RegExpNode* end_of_line = ActionNode::BeginSubmatch(
             stack_pointer_register,
@@ -4336,7 +4428,7 @@ RegExpNode* RegExpBackReference::ToNode(RegExpCompiler* compiler,
                                         RegExpNode* on_success) {
     return compiler->zone()->newInfallible<BackReferenceNode>(RegExpCapture::StartRegister(index()),
                                                               RegExpCapture::EndRegister(index()),
-                                                              on_success);
+                                                              compiler->read_backward(), on_success);
 }
 
 RegExpNode* RegExpEmpty::ToNode(RegExpCompiler* compiler,
@@ -4398,45 +4490,15 @@ RegExpNode* RegExpLookaround::ToNode(RegExpCompiler* compiler,
     if (!compiler->CheckOverRecursed())
         return on_success;
 
-    if (is_positive()) {
-        RegExpNode* bodyNode =
-            body()->ToNode(compiler,
-                           ActionNode::PositiveSubmatchSuccess(stack_pointer_register,
-                                                               position_register,
-                                                               register_count,
-                                                               register_start,
-                                                               on_success));
-        return ActionNode::BeginSubmatch(stack_pointer_register,
-                                         position_register,
-                                         bodyNode);
-    }
-
-    // We use a ChoiceNode for a negative lookahead because it has most of
-    // the characteristics we need.  It has the body of the lookahead as its
-    // first alternative and the expression after the lookahead of the second
-    // alternative.  If the first alternative succeeds then the
-    // NegativeSubmatchSuccess will unwind the stack including everything the
-    // choice node set up and backtrack.  If the first alternative fails then
-    // the second alternative is tried, which is exactly the desired result
-    // for a negative lookahead.  The NegativeLookaheadChoiceNode is a special
-    // ChoiceNode that knows to ignore the first exit when calculating quick
-    // checks.
-    Zone* zone = compiler->zone();
-
-    RegExpNode* success =
-        zone->newInfallible<NegativeSubmatchSuccess>(stack_pointer_register,
-                                                     position_register,
-                                                     register_count,
-                                                     register_start,
-                                                     zone);
-    GuardedAlternative body_alt(body()->ToNode(compiler, success));
-
-    ChoiceNode* choice_node =
-        zone->newInfallible<NegativeLookaroundChoiceNode>(body_alt, GuardedAlternative(on_success), zone);
-
-    return ActionNode::BeginSubmatch(stack_pointer_register,
-                                     position_register,
-                                     choice_node);
+    RegExpNode* result;
+    bool was_reading_backward = compiler->read_backward();
+    compiler->set_read_backward(type() == LOOKBEHIND);
+    Builder builder(is_positive(), on_success, stack_pointer_register,
+                    position_register, register_count, register_start);
+    RegExpNode* match = body_->ToNode(compiler, builder.on_match_success());
+    result = builder.ForMatch(match);
+    compiler->set_read_backward(was_reading_backward);
+    return result;
 }
 
 RegExpNode* RegExpCapture::ToNode(RegExpCompiler* compiler,
@@ -4451,8 +4513,10 @@ RegExpNode* RegExpCapture::ToNode(RegExpTree* body,
     if (!compiler->CheckOverRecursed())
         return on_success;
 
+    DCHECK_NOT_NULL(body);
     int start_reg = RegExpCapture::StartRegister(index);
     int end_reg = RegExpCapture::EndRegister(index);
+    if (compiler->read_backward()) std::swap(start_reg, end_reg);
     RegExpNode* store_end = ActionNode::StorePosition(end_reg, true, on_success);
     RegExpNode* body_node = body->ToNode(compiler, store_end);
     return ActionNode::StorePosition(start_reg, true, body_node);
@@ -4463,10 +4527,17 @@ RegExpNode* RegExpAlternative::ToNode(RegExpCompiler* compiler,
     if (!compiler->CheckOverRecursed())
         return on_success;
 
-    const RegExpTreeVector* children = nodes();
+    RegExpTreeVector* children = nodes();
     RegExpNode* current = on_success;
-    for (int i = children->length() - 1; i >= 0 && !compiler->isRegExpTooBig(); i--)
-        current = children->at(i)->ToNode(compiler, current);
+    if (compiler->read_backward()) {
+        for (int i = 0; i < children->length() && !compiler->isRegExpTooBig(); i++) {
+            current = children->at(i)->ToNode(compiler, current);
+        }
+    } else {
+        for (int i = children->length() - 1; i >= 0 && !compiler->isRegExpTooBig(); i--) {
+            current = children->at(i)->ToNode(compiler, current);
+        }
+    }
     return current;
 }
 
@@ -4478,7 +4549,7 @@ static void AddClass(const int* elmv,
     DCHECK(elmv[elmc] == kRangeEndMarker);
     for (int i = 0; i < elmc; i += 2) {
         DCHECK(elmv[i] < elmv[i + 1]);
-        ranges->append(CharacterRange(elmv[i], elmv[i + 1] - 1));
+        ranges->append(CharacterRange::Range(elmv[i], elmv[i + 1] - 1));
     }
 }
 
@@ -4515,7 +4586,7 @@ void CharacterRange::AddClassEscape(char type, CharacterRangeVector* ranges,
         if (type == 'W') {
             CharacterRangeVector* negated =
                 zone->newInfallible<CharacterRangeVector>(*zone);
-            CharacterRange::Negate(new_ranges, negated);
+            CharacterRange::Negate(new_ranges, negated, zone);
             new_ranges = negated;
         }
         for (int i = 0; i < new_ranges->length(); i++)
@@ -4648,7 +4719,7 @@ bool CharacterRange::IsCanonical(CharacterRangeVector* ranges) {
 CharacterRangeVector* CharacterSet::ranges(Zone* zone) {
     if (ranges_ == NULL) {
         ranges_ = zone->newInfallible<CharacterRangeVector>(*zone);
-        CharacterRange::AddClassEscape(standard_set_type_, ranges_, zone);
+        CharacterRange::AddClassEscape(standard_set_type_, ranges_, false, zone);
     }
     return ranges_;
 }
@@ -4775,7 +4846,7 @@ void CharacterRange::Canonicalize(CharacterRangeVector* character_ranges) {
 
 
 void CharacterRange::Negate(CharacterRangeVector* ranges,
-                            CharacterRangeVector* negated_ranges) {
+                            CharacterRangeVector* negated_ranges, Zone* zone) {
     DCHECK(CharacterRange::IsCanonical(ranges));
     DCHECK_EQ(0, negated_ranges->length());
     int range_count = ranges->length();
@@ -5064,6 +5135,7 @@ RegExpNode* OptionallyStepBackToLeadSurrogate(RegExpCompiler* compiler,
                                               RegExpNode* on_success) {
     // If the regexp matching starts within a surrogate pair, step back
     // to the lead surrogate and start matching from there.
+    DCHECK(!compiler->read_backward());
     irregexp::Zone* zone = compiler->zone();
     CharacterRangeVector* lead_surrogates = CharacterRange::List(
         zone, CharacterRange::Range(kLeadSurrogateStart, kLeadSurrogateEnd));
@@ -5075,11 +5147,11 @@ RegExpNode* OptionallyStepBackToLeadSurrogate(RegExpCompiler* compiler,
     int stack_register = compiler->UnicodeLookaroundStackRegister();
     int position_register = compiler->UnicodeLookaroundPositionRegister();
     RegExpNode* step_back = TextNode::CreateForCharacterRanges(
-        zone, lead_surrogates, on_success);
+        zone, lead_surrogates, true, on_success);
     RegExpLookaround::Builder builder(true, step_back, stack_register,
                                       position_register);
     RegExpNode* match_trail = TextNode::CreateForCharacterRanges(
-        zone, trail_surrogates, builder.on_match_success());
+        zone, trail_surrogates, false, builder.on_match_success());
 
     optional_step_back->AddAlternative(
         GuardedAlternative(builder.ForMatch(match_trail)));
@@ -5161,7 +5233,7 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
             ChoiceNode* first_step_node = alloc.newInfallible<ChoiceNode>(2, &alloc);
             first_step_node->AddAlternative(GuardedAlternative(captured_body));
             first_step_node->AddAlternative(GuardedAlternative(alloc.newInfallible<TextNode>(
-                alloc.newInfallible<RegExpCharacterClass>('*'), loop_node)));
+                alloc.newInfallible<RegExpCharacterClass>('*'), false, loop_node)));
             node = first_step_node;
         } else {
             node = loop_node;

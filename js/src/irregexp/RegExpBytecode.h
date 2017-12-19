@@ -91,7 +91,7 @@ const int BYTECODE_SHIFT = 8;
   V(CHECK_REGISTER_GE, 45, 12)    /* bc8 reg_idx24 value32 addr32 */           \
   V(CHECK_REGISTER_EQ_POS, 46, 8) /* bc8 reg_idx24 addr32 */                   \
   V(CHECK_AT_START, 47, 8) /* bc8 pad24 addr32                           */    \
-  V(CHECK_NOT_AT_START, 48, 8) /* bc8 pad24 addr32 */                          \
+  V(CHECK_NOT_AT_START, 48, 8) /* bc8 offset24 addr32 */                       \
   V(CHECK_GREEDY, 49, 8) /* bc8 pad24 addr32                           */      \
   V(ADVANCE_CP_AND_GOTO, 50, 8)           /* bc8 offset24 addr32 */            \
   V(SET_CURRENT_POSITION_FROM_END, 51, 4) /* bc8 idx24 */

@@ -610,9 +610,13 @@ NativeRegExpMacroAssembler::CheckAtStart(Label* on_at_start)
 }
 
 void
-NativeRegExpMacroAssembler::CheckNotAtStart(Label* on_not_at_start)
+NativeRegExpMacroAssembler::CheckNotAtStart(int cp_offset, Label* on_not_at_start)
 {
     JitSpew(SPEW_PREFIX "CheckNotAtStart");
+
+    // FIXME(anba): Apply changes from https://github.com/v8/v8/commits/master/src/regexp/x64/regexp-macro-assembler-x64.cc
+    if (cp_offset != 0)
+        MOZ_CRASH("CheckNotAtStart with cp_offset != 0 not implemented");
 
     // Did we start the match at the start of the string at all?
     Address startIndex(masm.getStackPointer(), offsetof(FrameData, startIndex));
@@ -701,9 +705,14 @@ NativeRegExpMacroAssembler::CheckGreedyLoop(Label* on_tos_equals_current_positio
 }
 
 void
-NativeRegExpMacroAssembler::CheckNotBackReference(int start_reg, Label* on_no_match)
+NativeRegExpMacroAssembler::CheckNotBackReference(int start_reg, bool read_backward,
+                                                  Label* on_no_match)
 {
     JitSpew(SPEW_PREFIX "CheckNotBackReference(%d)", start_reg);
+
+    // FIXME(anba): Apply changes from https://github.com/v8/v8/commits/master/src/regexp/x64/regexp-macro-assembler-x64.cc
+    if (read_backward)
+        MOZ_CRASH("CheckNotBackReference with read_backward == true not implemented");
 
     Label fallthrough;
     Label success;
@@ -772,10 +781,15 @@ NativeRegExpMacroAssembler::CheckNotBackReference(int start_reg, Label* on_no_ma
 }
 
 void
-NativeRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(int start_reg, bool unicode,
+NativeRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(int start_reg,
+                                                            bool read_backward, bool unicode,
                                                             Label* on_no_match)
 {
     JitSpew(SPEW_PREFIX "CheckNotBackReferenceIgnoreCase(%d, %d)", start_reg, unicode);
+
+    // FIXME(anba): Apply changes from https://github.com/v8/v8/commits/master/src/regexp/x64/regexp-macro-assembler-x64.cc
+    if (read_backward)
+        MOZ_CRASH("CheckNotBackReferenceIgnoreCase with read_backward == true not implemented");
 
     Label fallthrough;
 

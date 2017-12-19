@@ -488,24 +488,27 @@ class ActionNode : public SeqRegExpNode {
 
 class TextNode : public SeqRegExpNode {
   public:
-    TextNode(TextElementVector* elms,
+    TextNode(TextElementVector* elms, bool read_backward,
              RegExpNode* on_success)
-      : SeqRegExpNode(on_success), elms_(elms) {}
+      : SeqRegExpNode(on_success), elms_(elms), read_backward_(read_backward) {}
 
-    TextNode(RegExpCharacterClass* that,
+    TextNode(RegExpCharacterClass* that, bool read_backward,
              RegExpNode* on_success)
       : SeqRegExpNode(on_success),
-        elms_(zone()->newInfallible<TextElementVector>(*zone())) {
+        elms_(zone()->newInfallible<TextElementVector>(*zone())),
+        read_backward_(read_backward) {
         elms_->append(TextElement::CharClass(that));
     }
     // Create TextNode for a single character class for the given ranges.
     static TextNode* CreateForCharacterRanges(Zone* zone,
                                               CharacterRangeVector* ranges,
+                                              bool read_backward,
                                               RegExpNode* on_success);
     // Create TextNode for a surrogate pair with a range given for the
     // lead and the trail surrogate each.
     static TextNode* CreateForSurrogatePair(Zone* zone, CharacterRange lead,
                                             CharacterRange trail,
+                                            bool read_backward,
                                             RegExpNode* on_success);
 
     virtual void Accept(NodeVisitor* visitor);
@@ -516,6 +519,7 @@ class TextNode : public SeqRegExpNode {
                                       int characters_filled_in,
                                       bool not_at_start);
     TextElementVector* elements() { return elms_; }
+    bool read_backward() { return read_backward_; }
     void MakeCaseIndependent(bool is_one_byte);
     virtual int GreedyLoopTextLength();
     virtual RegExpNode* GetSuccessorOfOmnivorousTextNode(
@@ -544,6 +548,7 @@ class TextNode : public SeqRegExpNode {
                       int* checked_up_to);
     int Length();
     TextElementVector* elms_;
+    bool read_backward_;
 };
 
 class AssertionNode : public SeqRegExpNode {
@@ -596,15 +601,17 @@ class AssertionNode : public SeqRegExpNode {
 
 class BackReferenceNode : public SeqRegExpNode {
   public:
-    BackReferenceNode(int start_reg, int end_reg,
+    BackReferenceNode(int start_reg, int end_reg, bool read_backward,
                       RegExpNode* on_success)
       : SeqRegExpNode(on_success),
         start_reg_(start_reg),
-        end_reg_(end_reg) {}
+        end_reg_(end_reg),
+        read_backward_(read_backward) {}
 
     virtual void Accept(NodeVisitor* visitor);
     int start_register() { return start_reg_; }
     int end_register() { return end_reg_; }
+    bool read_backward() { return read_backward_; }
     virtual void Emit(RegExpCompiler* compiler, Trace* trace);
     virtual int EatsAtLeast(int still_to_find,
                             int recursion_depth,
@@ -621,6 +628,7 @@ class BackReferenceNode : public SeqRegExpNode {
   private:
     int start_reg_;
     int end_reg_;
+    bool read_backward_;
 };
 
 class EndNode : public RegExpNode {
@@ -745,6 +753,7 @@ class ChoiceNode : public RegExpNode {
         return true;
     }
     virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
+    virtual bool read_backward() { return false; }
 
   protected:
     int GreedyLoopTextLengthForAlternative(GuardedAlternative* alternative);
@@ -799,11 +808,12 @@ class NegativeLookaroundChoiceNode : public ChoiceNode {
 
 class LoopChoiceNode : public ChoiceNode {
   public:
-    LoopChoiceNode(bool body_can_be_zero_length, Zone* zone)
+    LoopChoiceNode(bool body_can_be_zero_length, bool read_backward, Zone* zone)
       : ChoiceNode(2, zone),
         loop_node_(NULL),
         continue_node_(NULL),
-        body_can_be_zero_length_(body_can_be_zero_length) {}
+        body_can_be_zero_length_(body_can_be_zero_length),
+        read_backward_(read_backward) {}
 
     void AddLoopAlternative(GuardedAlternative alt);
     void AddContinueAlternative(GuardedAlternative alt);
@@ -818,6 +828,7 @@ class LoopChoiceNode : public ChoiceNode {
     RegExpNode* loop_node() { return loop_node_; }
     RegExpNode* continue_node() { return continue_node_; }
     bool body_can_be_zero_length() { return body_can_be_zero_length_; }
+    virtual bool read_backward() { return read_backward_; }
     virtual void Accept(NodeVisitor* visitor);
     virtual RegExpNode* FilterOneByte(int depth, bool ignore_case);
 
@@ -832,6 +843,7 @@ class LoopChoiceNode : public ChoiceNode {
     RegExpNode* loop_node_;
     RegExpNode* continue_node_;
     bool body_can_be_zero_length_;
+    bool read_backward_;
 };
 
 // Improve the speed that we scan for an initial point where a non-anchored
