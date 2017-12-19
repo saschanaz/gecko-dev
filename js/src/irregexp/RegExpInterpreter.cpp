@@ -118,12 +118,12 @@ Load16Aligned(const uint8_t* pc)
 
 template <typename CharT>
 RegExpRunStatus
-irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* chars, size_t current,
+irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* subject, size_t current,
                         size_t length, MatchPairs* matches, size_t* endIndex)
 {
-    const uint8_t* pc = byteCode;
+    const uint8_t* pc = code_base;
 
-    uint32_t current_char = current ? chars[current - 1] : '\n';
+    uint32_t current_char = current ? subject[current - 1] : '\n';
 
     RegExpStackCursor stack(cx);
 
@@ -150,18 +150,21 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
           BYTECODE(BREAK)
             MOZ_CRASH("Bad bytecode: BREAK");
           BYTECODE(PUSH_CP)
-            if (!stack.push(current))
+            if (!stack.push(current)) {
                 return RegExpRunStatus_Error;
+            }
             pc += BC_PUSH_CP_LENGTH;
             break;
           BYTECODE(PUSH_BT)
-            if (!stack.push(Load32Aligned(pc + 4)))
+            if (!stack.push(Load32Aligned(pc + 4))) {
                 return RegExpRunStatus_Error;
+            }
             pc += BC_PUSH_BT_LENGTH;
             break;
           BYTECODE(PUSH_REGISTER)
-            if (!stack.push(registers[insn >> BYTECODE_SHIFT]))
+            if (!stack.push(registers[insn >> BYTECODE_SHIFT])) {
                 return RegExpRunStatus_Error;
+            }
             pc += BC_PUSH_REGISTER_LENGTH;
             break;
           BYTECODE(SET_REGISTER)
@@ -195,7 +198,7 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
           BYTECODE(POP_BT)
             if (!CheckForInterrupt(cx))
                 return RegExpRunStatus_Error;
-            pc = byteCode + stack.pop();
+            pc = code_base + stack.pop();
             break;
           BYTECODE(POP_REGISTER)
             registers[insn >> BYTECODE_SHIFT] = stack.pop();
@@ -214,16 +217,16 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
             pc += BC_ADVANCE_CP_LENGTH;
             break;
           BYTECODE(GOTO)
-            pc = byteCode + Load32Aligned(pc + 4);
+            pc = code_base + Load32Aligned(pc + 4);
             break;
           BYTECODE(ADVANCE_CP_AND_GOTO)
             current += insn >> BYTECODE_SHIFT;
-            pc = byteCode + Load32Aligned(pc + 4);
+            pc = code_base + Load32Aligned(pc + 4);
             break;
           BYTECODE(CHECK_GREEDY)
             if ((int32_t)current == stack.peek()) {
                 stack.pop();
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
             } else {
                 pc += BC_CHECK_GREEDY_LENGTH;
             }
@@ -231,34 +234,35 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
           BYTECODE(LOAD_CURRENT_CHAR) {
             size_t pos = current + (insn >> BYTECODE_SHIFT);
             if (pos >= length) {
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
             } else {
-                current_char = chars[pos];
+                current_char = subject[pos];
                 pc += BC_LOAD_CURRENT_CHAR_LENGTH;
             }
             break;
           }
           BYTECODE(LOAD_CURRENT_CHAR_UNCHECKED) {
             int pos = current + (insn >> BYTECODE_SHIFT);
-            current_char = chars[pos];
+            current_char = subject[pos];
             pc += BC_LOAD_CURRENT_CHAR_UNCHECKED_LENGTH;
             break;
           }
           BYTECODE(LOAD_2_CURRENT_CHARS) {
             size_t pos = current + (insn >> BYTECODE_SHIFT);
             if (pos + 2 > length) {
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
             } else {
-                CharT next = chars[pos + 1];
-                current_char = (chars[pos] | (next << (kBitsPerByte * sizeof(CharT))));
+                CharT next = subject[pos + 1];
+                current_char =
+                    (subject[pos] | (next << (kBitsPerByte * sizeof(CharT))));
                 pc += BC_LOAD_2_CURRENT_CHARS_LENGTH;
             }
             break;
           }
           BYTECODE(LOAD_2_CURRENT_CHARS_UNCHECKED) {
             int pos = current + (insn >> BYTECODE_SHIFT);
-            char16_t next = chars[pos + 1];
-            current_char = (chars[pos] | (next << (kBitsPerByte * sizeof(char16_t))));
+            char16_t next = subject[pos + 1];
+            current_char = (subject[pos] | (next << (kBitsPerByte * sizeof(char16_t))));
             pc += BC_LOAD_2_CURRENT_CHARS_UNCHECKED_LENGTH;
             break;
           }
@@ -268,145 +272,164 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
             MOZ_CRASH("ASCII handling implemented");
           BYTECODE(CHECK_4_CHARS) {
             uint32_t c = Load32Aligned(pc + 4);
-            if (c == current_char)
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (c == current_char) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_CHECK_4_CHARS_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_CHAR) {
             uint32_t c = (insn >> BYTECODE_SHIFT);
-            if (c == current_char)
-                pc = byteCode + Load32Aligned(pc + 4);
-            else
+            if (c == current_char) {
+                pc = code_base + Load32Aligned(pc + 4);
+            } else {
                 pc += BC_CHECK_CHAR_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_NOT_4_CHARS) {
             uint32_t c = Load32Aligned(pc + 4);
-            if (c != current_char)
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (c != current_char) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_CHECK_NOT_4_CHARS_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_NOT_CHAR) {
             uint32_t c = (insn >> BYTECODE_SHIFT);
-            if (c != current_char)
-                pc = byteCode + Load32Aligned(pc + 4);
-            else
+            if (c != current_char) {
+                pc = code_base + Load32Aligned(pc + 4);
+            } else {
                 pc += BC_CHECK_NOT_CHAR_LENGTH;
+            }
             break;
           }
           BYTECODE(AND_CHECK_4_CHARS) {
             uint32_t c = Load32Aligned(pc + 4);
-            if (c == (current_char & Load32Aligned(pc + 8)))
-                pc = byteCode + Load32Aligned(pc + 12);
-            else
+            if (c == (current_char & Load32Aligned(pc + 8))) {
+                pc = code_base + Load32Aligned(pc + 12);
+            } else {
                 pc += BC_AND_CHECK_4_CHARS_LENGTH;
+            }
             break;
           }
           BYTECODE(AND_CHECK_CHAR) {
             uint32_t c = (insn >> BYTECODE_SHIFT);
-            if (c == (current_char & Load32Aligned(pc + 4)))
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (c == (current_char & Load32Aligned(pc + 4))) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_AND_CHECK_CHAR_LENGTH;
+            }
             break;
           }
           BYTECODE(AND_CHECK_NOT_4_CHARS) {
             uint32_t c = Load32Aligned(pc + 4);
-            if (c != (current_char & Load32Aligned(pc + 8)))
-                pc = byteCode + Load32Aligned(pc + 12);
-            else
+            if (c != (current_char & Load32Aligned(pc + 8))) {
+                pc = code_base + Load32Aligned(pc + 12);
+            } else {
                 pc += BC_AND_CHECK_NOT_4_CHARS_LENGTH;
+            }
             break;
           }
           BYTECODE(AND_CHECK_NOT_CHAR) {
             uint32_t c = (insn >> BYTECODE_SHIFT);
-            if (c != (current_char & Load32Aligned(pc + 4)))
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (c != (current_char & Load32Aligned(pc + 4))) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_AND_CHECK_NOT_CHAR_LENGTH;
+            }
             break;
           }
           BYTECODE(MINUS_AND_CHECK_NOT_CHAR) {
             uint32_t c = (insn >> BYTECODE_SHIFT);
             uint32_t minus = Load16Aligned(pc + 4);
             uint32_t mask = Load16Aligned(pc + 6);
-            if (c != ((current_char - minus) & mask))
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (c != ((current_char - minus) & mask)) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_MINUS_AND_CHECK_NOT_CHAR_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_CHAR_IN_RANGE) {
             uint32_t from = Load16Aligned(pc + 4);
             uint32_t to = Load16Aligned(pc + 6);
-            if (from <= current_char && current_char <= to)
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (from <= current_char && current_char <= to) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_CHECK_CHAR_IN_RANGE_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_CHAR_NOT_IN_RANGE) {
             uint32_t from = Load16Aligned(pc + 4);
             uint32_t to = Load16Aligned(pc + 6);
-            if (from > current_char || current_char > to)
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (from > current_char || current_char > to) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_CHECK_CHAR_NOT_IN_RANGE_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_BIT_IN_TABLE) {
             int mask = RegExpMacroAssembler::kTableMask;
             uint8_t b = pc[8 + ((current_char & mask) >> kBitsPerByteLog2)];
             int bit = (current_char & (kBitsPerByte - 1));
-            if ((b & (1 << bit)) != 0)
-                pc = byteCode + Load32Aligned(pc + 4);
-            else
+            if ((b & (1 << bit)) != 0) {
+                pc = code_base + Load32Aligned(pc + 4);
+            } else {
                 pc += BC_CHECK_BIT_IN_TABLE_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_LT) {
             uint32_t limit = (insn >> BYTECODE_SHIFT);
-            if (current_char < limit)
-                pc = byteCode + Load32Aligned(pc + 4);
-            else
+            if (current_char < limit) {
+                pc = code_base + Load32Aligned(pc + 4);
+            } else {
                 pc += BC_CHECK_LT_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_GT) {
             uint32_t limit = (insn >> BYTECODE_SHIFT);
-            if (current_char > limit)
-                pc = byteCode + Load32Aligned(pc + 4);
-            else
+            if (current_char > limit) {
+                pc = code_base + Load32Aligned(pc + 4);
+            } else {
                 pc += BC_CHECK_GT_LENGTH;
+            }
             break;
           }
           BYTECODE(CHECK_REGISTER_LT)
-            if (registers[insn >> BYTECODE_SHIFT] < Load32Aligned(pc + 4))
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (registers[insn >> BYTECODE_SHIFT] < Load32Aligned(pc + 4)) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_CHECK_REGISTER_LT_LENGTH;
+            }
             break;
           BYTECODE(CHECK_REGISTER_GE)
-            if (registers[insn >> BYTECODE_SHIFT] >= Load32Aligned(pc + 4))
-                pc = byteCode + Load32Aligned(pc + 8);
-            else
+            if (registers[insn >> BYTECODE_SHIFT] >= Load32Aligned(pc + 4)) {
+                pc = code_base + Load32Aligned(pc + 8);
+            } else {
                 pc += BC_CHECK_REGISTER_GE_LENGTH;
+            }
             break;
           BYTECODE(CHECK_REGISTER_EQ_POS)
-            if (registers[insn >> BYTECODE_SHIFT] == (int32_t) current)
-                pc = byteCode + Load32Aligned(pc + 4);
-            else
+            if (registers[insn >> BYTECODE_SHIFT] == (int32_t) current) {
+                pc = code_base + Load32Aligned(pc + 4);
+            } else {
                 pc += BC_CHECK_REGISTER_EQ_POS_LENGTH;
+            }
             break;
           BYTECODE(CHECK_NOT_REGS_EQUAL)
-            if (registers[insn >> BYTECODE_SHIFT] == registers[Load32Aligned(pc + 4)])
+            if (registers[insn >> BYTECODE_SHIFT] ==
+                registers[Load32Aligned(pc + 4)]) {
                 pc += BC_CHECK_NOT_REGS_EQUAL_LENGTH;
-            else
-                pc = byteCode + Load32Aligned(pc + 8);
+            } else {
+                pc = code_base + Load32Aligned(pc + 8);
+            }
             break;
           BYTECODE(CHECK_NOT_BACK_REF) {
             int from = registers[insn >> BYTECODE_SHIFT];
@@ -416,13 +439,13 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
                 break;
             }
             if (current + len > length) {
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
                 break;
             } else {
                 int i;
                 for (i = 0; i < len; i++) {
-                    if (chars[from + i] != chars[current + i]) {
-                        pc = byteCode + Load32Aligned(pc + 4);
+                    if (subject[from + i] != subject[current + i]) {
+                        pc = code_base + Load32Aligned(pc + 4);
                         break;
                     }
                 }
@@ -432,6 +455,9 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
             pc += BC_CHECK_NOT_BACK_REF_LENGTH;
             break;
           }
+          BYTECODE(CHECK_NOT_BACK_REF_BACKWARD) {
+            MOZ_CRASH("backward reading not implemented");
+          }
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE) {
             int from = registers[insn >> BYTECODE_SHIFT];
             int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
@@ -440,14 +466,14 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
                 break;
             }
             if (current + len > length) {
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
                 break;
             }
-            if (CaseInsensitiveCompareStrings(chars + from, chars + current, len * sizeof(CharT))) {
+            if (CaseInsensitiveCompareStrings(subject + from, subject + current, len * sizeof(CharT))) {
                 current += len;
                 pc += BC_CHECK_NOT_BACK_REF_NO_CASE_LENGTH;
             } else {
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
             }
             break;
           }
@@ -459,36 +485,42 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* cha
                 break;
             }
             if (current + len > length) {
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
                 break;
             }
-            if (CaseInsensitiveCompareUCStrings(chars + from, chars + current,
+            if (CaseInsensitiveCompareUCStrings(subject + from, subject + current,
                                                 len * sizeof(CharT)))
             {
                 current += len;
                 pc += BC_CHECK_NOT_BACK_REF_NO_CASE_UNICODE_LENGTH;
             } else {
-                pc = byteCode + Load32Aligned(pc + 4);
+                pc = code_base + Load32Aligned(pc + 4);
             }
             break;
           }
+          BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_UNICODE_BACKWARD)
+          BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_BACKWARD) {
+            MOZ_CRASH("backward reading not implemented");
+          }
           BYTECODE(CHECK_AT_START)
-            if (current == 0)
-                pc = byteCode + Load32Aligned(pc + 4);
-            else
+            if (current == 0) {
+                pc = code_base + Load32Aligned(pc + 4);
+            } else {
                 pc += BC_CHECK_AT_START_LENGTH;
+            }
             break;
           BYTECODE(CHECK_NOT_AT_START)
-            if (current == 0)
+            if (current == 0) {
                 pc += BC_CHECK_NOT_AT_START_LENGTH;
-            else
-                pc = byteCode + Load32Aligned(pc + 4);
+            } else {
+                pc = code_base + Load32Aligned(pc + 4);
+            }
             break;
           BYTECODE(SET_CURRENT_POSITION_FROM_END) {
             size_t by = static_cast<uint32_t>(insn) >> BYTECODE_SHIFT;
             if (length - current > by) {
                 current = length - by;
-                current_char = chars[current - 1];
+                current_char = subject[current - 1];
             }
             pc += BC_SET_CURRENT_POSITION_FROM_END_LENGTH;
             break;

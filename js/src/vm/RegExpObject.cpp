@@ -849,6 +849,9 @@ RegExpShared::dumpBytecode(JSContext* cx, MutableHandleRegExpShared re, bool mat
                     offset);
             BRANCH(CHECK_NOT_BACK_REF, offset);
           }
+          BYTECODE(CHECK_NOT_BACK_REF_BACKWARD) {
+            MOZ_CRASH("backward reading not implemented");
+          }
           BYTECODE(CHECK_NOT_BACK_REF_NO_CASE) {
             int32_t offset = Load32Aligned(pc + 4);
             fprintf(stderr, " reg[%d], %d",
@@ -862,6 +865,10 @@ RegExpShared::dumpBytecode(JSContext* cx, MutableHandleRegExpShared re, bool mat
                     insn >> irregexp::BYTECODE_SHIFT,
                     offset);
             BRANCH(CHECK_NOT_BACK_REF_NO_CASE_UNICODE, offset);
+          }
+          BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_UNICODE_BACKWARD)
+          BYTECODE(CHECK_NOT_BACK_REF_NO_CASE_BACKWARD) {
+            MOZ_CRASH("backward reading not implemented");
           }
           BYTECODE(CHECK_AT_START) {
             int32_t offset = Load32Aligned(pc + 4);
