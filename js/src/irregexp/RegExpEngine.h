@@ -48,67 +48,12 @@ namespace jit {
 
 namespace irregexp {
 
-class RegExpTree;
+class NodeVisitor;
+class RegExpCompiler;
 class RegExpMacroAssembler;
-
-struct RegExpCompileData
-{
-    RegExpCompileData()
-      : tree(nullptr),
-        simple(true),
-        contains_anchor(false),
-        capture_count(0)
-    {}
-
-    RegExpTree* tree;
-    bool simple;
-    bool contains_anchor;
-    int capture_count;
-};
-
-struct RegExpCode
-{
-    jit::JitCode* jitCode;
-    uint8_t* byteCode;
-
-    RegExpCode()
-      : jitCode(nullptr), byteCode(nullptr)
-    {}
-
-    bool empty() {
-        return !jitCode && !byteCode;
-    }
-
-    void destroy() {
-        js_free(byteCode);
-    }
-};
-
-RegExpCode
-CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompileData* data,
-               HandleLinearString sample,  bool is_global, bool ignore_case,
-               bool is_latin1, bool match_only, bool force_bytecode, bool sticky,
-               bool unicode, RegExpShared::JitCodeTables& tables);
-
-// Note: this may return RegExpRunStatus_Error if an interrupt was requested
-// while the code was executing.
-template <typename CharT>
-RegExpRunStatus
-ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const CharT* chars, size_t start,
-            size_t length, MatchPairs* matches, size_t* endIndex);
-
-template <typename CharT>
-RegExpRunStatus
-InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* chars, size_t start,
-              size_t length, MatchPairs* matches, size_t* endIndex);
-
-#define FOR_EACH_NODE_TYPE(VISIT)                                    \
-  VISIT(End)                                                         \
-  VISIT(Action)                                                      \
-  VISIT(Choice)                                                      \
-  VISIT(BackReference)                                               \
-  VISIT(Assertion)                                                   \
-  VISIT(Text)
+class RegExpNode;
+class RegExpTree;
+class BoyerMooreLookahead;
 
 // A set of unsigned integers that behaves especially well on small
 // integers (< 32).
@@ -149,10 +94,18 @@ class OutSet
     friend class Trace;
 };
 
-class NodeVisitor;
-class RegExpCompiler;
+#define FOR_EACH_NODE_TYPE(VISIT)                                    \
+  VISIT(End)                                                         \
+  VISIT(Action)                                                      \
+  VISIT(Choice)                                                      \
+  VISIT(BackReference)                                               \
+  VISIT(Assertion)                                                   \
+  VISIT(Text)
+
 class Trace;
-class BoyerMooreLookahead;
+struct PreloadState;
+class GreedyLoopState;
+class AlternativeGenerationList;
 
 struct NodeInfo
 {
@@ -1304,6 +1257,57 @@ class Analysis : public NodeVisitor
     Analysis(Analysis&) = delete;
     void operator=(Analysis&) = delete;
 };
+
+struct RegExpCompileData
+{
+    RegExpCompileData()
+      : tree(nullptr),
+        simple(true),
+        contains_anchor(false),
+        capture_count(0)
+    {}
+
+    RegExpTree* tree;
+    bool simple;
+    bool contains_anchor;
+    int capture_count;
+};
+
+struct RegExpCode
+{
+    jit::JitCode* jitCode;
+    uint8_t* byteCode;
+
+    RegExpCode()
+      : jitCode(nullptr), byteCode(nullptr)
+    {}
+
+    bool empty() {
+        return !jitCode && !byteCode;
+    }
+
+    void destroy() {
+        js_free(byteCode);
+    }
+};
+
+RegExpCode
+CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompileData* data,
+               HandleLinearString sample,  bool is_global, bool ignore_case,
+               bool is_latin1, bool match_only, bool force_bytecode, bool sticky,
+               bool unicode, RegExpShared::JitCodeTables& tables);
+
+// Note: this may return RegExpRunStatus_Error if an interrupt was requested
+// while the code was executing.
+template <typename CharT>
+RegExpRunStatus
+ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const CharT* chars, size_t start,
+            size_t length, MatchPairs* matches, size_t* endIndex);
+
+template <typename CharT>
+RegExpRunStatus
+InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* chars, size_t start,
+              size_t length, MatchPairs* matches, size_t* endIndex);
 
 void
 AddClassNegated(const int* elmv, int elmc, CharacterRangeVector* ranges);
