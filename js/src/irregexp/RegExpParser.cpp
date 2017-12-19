@@ -248,11 +248,11 @@ NegateUnicodeRanges(LifoAlloc* alloc, InfallibleVector<RangeType, 1>** ranges,
     //   result_ranges = tmp_ranges - ranges[N-1]
     //   SWAP(result_ranges, tmp_ranges)
     // The last SWAP is just for simplicity of the loop.
-    for (size_t i = 0; i < (*ranges)->length(); i++) {
+    for (int i = 0; i < (*ranges)->length(); i++) {
         result_ranges->clear();
 
         const RangeType& range = (**ranges)[i];
-        for (size_t j = 0; j < tmp_ranges->length(); j++) {
+        for (int j = 0; j < tmp_ranges->length(); j++) {
             const RangeType& tmpRange = (*tmp_ranges)[j];
             auto from1 = tmpRange.from();
             auto to1 = tmpRange.to();
@@ -289,7 +289,7 @@ NegateUnicodeRanges(LifoAlloc* alloc, InfallibleVector<RangeType, 1>** ranges,
 static bool
 WideCharRangesContain(WideCharRangeVector* wide_ranges, widechar c)
 {
-    for (size_t i = 0; i < wide_ranges->length(); i++) {
+    for (int i = 0; i < wide_ranges->length(); i++) {
         const WideCharRange& range = (*wide_ranges)[i];
         if (range.Contains(c))
             return true;
@@ -349,7 +349,7 @@ UnicodeRangesAtom(LifoAlloc* alloc,
 #undef CALL_CALC
 
         if (tmp_wide_ranges) {
-            for (size_t i = 0; i < tmp_wide_ranges->length(); i++)
+            for (int i = 0; i < tmp_wide_ranges->length(); i++)
                 wide_ranges->append((*tmp_wide_ranges)[i]);
         }
     }
@@ -391,7 +391,7 @@ UnicodeRangesAtom(LifoAlloc* alloc,
         added = true;
     }
 
-    for (size_t i = 0; i < wide_ranges->length(); i++) {
+    for (int i = 0; i < wide_ranges->length(); i++) {
         if (added)
             builder->NewAlternative();
 

@@ -54,7 +54,7 @@ FOR_EACH_REG_EXP_TREE_TYPE(MAKE_TYPE_CASE)
 
 static Interval ListCaptureRegisters(RegExpTreeVector* children) {
     Interval result = Interval::Empty();
-    for (size_t i = 0; i < children->length(); i++)
+    for (int i = 0; i < children->length(); i++)
         result = result.Union(children->at(i)->CaptureRegisters());
     return result;
 }
@@ -90,7 +90,7 @@ bool RegExpAssertion::IsAnchoredAtEnd() {
 
 bool RegExpAlternative::IsAnchoredAtStart() {
     RegExpTreeVector* nodes = this->nodes();
-    for (size_t i = 0; i < nodes->length(); i++) {
+    for (int i = 0; i < nodes->length(); i++) {
         RegExpTree* node = nodes->at(i);
         if (node->IsAnchoredAtStart()) {
             return true;
@@ -118,7 +118,7 @@ bool RegExpAlternative::IsAnchoredAtEnd() {
 
 bool RegExpDisjunction::IsAnchoredAtStart() {
     RegExpTreeVector* alternatives = this->alternatives();
-    for (size_t i = 0; i < alternatives->length(); i++) {
+    for (int i = 0; i < alternatives->length(); i++) {
         if (!alternatives->at(i)->IsAnchoredAtStart()) return false;
     }
     return true;
@@ -126,7 +126,7 @@ bool RegExpDisjunction::IsAnchoredAtStart() {
 
 bool RegExpDisjunction::IsAnchoredAtEnd() {
     RegExpTreeVector* alternatives = this->alternatives();
-    for (size_t i = 0; i < alternatives->length(); i++) {
+    for (int i = 0; i < alternatives->length(); i++) {
         if (!alternatives->at(i)->IsAnchoredAtEnd()) return false;
     }
     return true;
@@ -146,7 +146,7 @@ RegExpDisjunction::RegExpDisjunction(RegExpTreeVector* alternatives)
     RegExpTree* first_alternative = alternatives->at(0);
     min_match_ = first_alternative->min_match();
     max_match_ = first_alternative->max_match();
-    for (size_t i = 1; i < alternatives->length(); i++) {
+    for (int i = 1; i < alternatives->length(); i++) {
         RegExpTree* alternative = alternatives->at(i);
         min_match_ = Min(min_match_, alternative->min_match());
         max_match_ = Max(max_match_, alternative->max_match());
@@ -166,7 +166,7 @@ RegExpAlternative::RegExpAlternative(RegExpTreeVector* nodes)
     DCHECK(nodes->length() > 1);
     min_match_ = 0;
     max_match_ = 0;
-    for (size_t i = 0; i < nodes->length(); i++) {
+    for (int i = 0; i < nodes->length(); i++) {
         RegExpTree* node = nodes->at(i);
         int node_min_match = node->min_match();
         min_match_ = IncreaseBy(min_match_, node_min_match);

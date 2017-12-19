@@ -896,7 +896,7 @@ typedef InfallibleVector<BoyerMoorePositionInfo*, 1> BoyerMoorePositionInfoVecto
 
 class BoyerMooreLookahead {
   public:
-    BoyerMooreLookahead(size_t length, RegExpCompiler* compiler, Zone* zone);
+    BoyerMooreLookahead(int length, RegExpCompiler* compiler, Zone* zone);
 
     int length() { return length_; }
     int max_char() { return max_char_; }

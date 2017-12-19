@@ -109,7 +109,7 @@ class BufferedVector
             DCHECK_EQ(0, i);
             return last_;
         } else {
-            if (size_t(i) == list_->length()) {
+            if (i == list_->length()) {
                 DCHECK(last_ != nullptr);
                 return last_;
             } else {

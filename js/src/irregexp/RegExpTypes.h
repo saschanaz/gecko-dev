@@ -68,9 +68,13 @@ namespace String {
     constexpr int32_t kMaxCodePoint = 0x10ffff;
 }
 
-namespace unibrow { namespace Ecma262UnCanonicalize {
-   constexpr size_t kMaxWidth = 4;
-} }
+namespace unibrow {
+    using uchar = char16_t;
+
+    namespace Ecma262UnCanonicalize {
+        constexpr size_t kMaxWidth = 4;
+    }
+}
 
 using Zone = LifoAlloc;
 
@@ -95,7 +99,7 @@ class InfallibleVector
     void popBack() { vector_.popBack(); }
     void reserve(size_t n) { MOZ_ALWAYS_TRUE(vector_.reserve(n)); }
 
-    size_t length() const { return vector_.length(); }
+    int length() const { return vector_.length(); }
     T popCopy() { return vector_.popCopy(); }
 
     T* begin() { return vector_.begin(); }
@@ -118,7 +122,7 @@ class InfallibleVector
     }
 
     bool contains(const T& value) const {
-        for (size_t i = 0; i < length(); i++) {
+        for (size_t i = 0, len = static_cast<size_t>(length()); i < len; i++) {
             if (at(i) == value)
                 return true;
         }
