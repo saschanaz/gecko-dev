@@ -905,7 +905,7 @@ bool RegExpParser<CharT>::ParseUnicodeEscape(uc32* value, bool* parsed) {
     }
     // \u but no {, or \u{...} escapes not allowed.
     bool result = ParseHexEscape(4, value);
-    if (result && unicode() && unicode::IsLeadSurrogate(*value) &&
+    if (result && unicode() && unibrow::Utf16::IsLeadSurrogate(*value) &&
         current() == '\\') {
         // Attempt to read trail surrogate.
         const CharT* start = position();
@@ -913,9 +913,9 @@ bool RegExpParser<CharT>::ParseUnicodeEscape(uc32* value, bool* parsed) {
             Advance(2);
             uc32 trail;
             if (ParseHexEscape(4, &trail) &&
-                unicode::IsTrailSurrogate(trail)) {
-                *value = unicode::UTF16Decode(static_cast<uc16>(*value),
-                                              static_cast<uc16>(trail));
+                unibrow::Utf16::IsTrailSurrogate(trail)) {
+                *value = unibrow::Utf16::CombineSurrogatePair(static_cast<uc16>(*value),
+                                                              static_cast<uc16>(trail));
                 *parsed = true;
                 return true;
             }
@@ -1219,20 +1219,20 @@ RegExpBuilder::RegExpBuilder(Zone* zone, bool ignore_case, bool unicode)
 }
 
 void RegExpBuilder::AddLeadSurrogate(uc16 lead_surrogate) {
-    DCHECK(unicode::IsLeadSurrogate(lead_surrogate));
+    DCHECK(unibrow::Utf16::IsLeadSurrogate(lead_surrogate));
     FlushPendingSurrogate();
     // Hold onto the lead surrogate, waiting for a trail surrogate to follow.
     pending_surrogate_ = lead_surrogate;
 }
 
 void RegExpBuilder::AddTrailSurrogate(uc16 trail_surrogate) {
-    DCHECK(unicode::IsTrailSurrogate(trail_surrogate));
+    DCHECK(unibrow::Utf16::IsTrailSurrogate(trail_surrogate));
     if (pending_surrogate_ != kNoPendingSurrogate) {
         uc16 lead_surrogate = pending_surrogate_;
         pending_surrogate_ = kNoPendingSurrogate;
-        DCHECK(unicode::IsLeadSurrogate(lead_surrogate));
+        DCHECK(unibrow::Utf16::IsLeadSurrogate(lead_surrogate));
         uc32 combined =
-            unicode::UTF16Decode(lead_surrogate, trail_surrogate);
+            unibrow::Utf16::CombineSurrogatePair(lead_surrogate, trail_surrogate);
         if (NeedsDesugaringForIgnoreCase(combined)) {
             AddCharacterClassForDesugaring(combined);
         } else {
@@ -1299,13 +1299,13 @@ void RegExpBuilder::AddCharacter(uc16 c) {
 }
 
 void RegExpBuilder::AddUnicodeCharacter(uc32 c) {
-    if (c > static_cast<uc32>(unicode::UTF16Max)) {
+    if (c > static_cast<uc32>(unibrow::Utf16::kMaxNonSurrogateCharCode)) {
         DCHECK(unicode());
-        AddLeadSurrogate(unicode::LeadSurrogate(c));
-        AddTrailSurrogate(unicode::TrailSurrogate(c));
-    } else if (unicode() && unicode::IsLeadSurrogate(c)) {
+        AddLeadSurrogate(unibrow::Utf16::LeadSurrogate(c));
+        AddTrailSurrogate(unibrow::Utf16::TrailSurrogate(c));
+    } else if (unicode() && unibrow::Utf16::IsLeadSurrogate(c)) {
         AddLeadSurrogate(c);
-    } else if (unicode() && unicode::IsTrailSurrogate(c)) {
+    } else if (unicode() && unibrow::Utf16::IsTrailSurrogate(c)) {
         AddTrailSurrogate(c);
     } else {
         AddCharacter(static_cast<uc16>(c));
@@ -1400,17 +1400,18 @@ bool RegExpBuilder::NeedsDesugaringForUnicode(RegExpCharacterClass* cc) {
         uc32 from = ranges->at(i).from();
         uc32 to = ranges->at(i).to();
         // Check for non-BMP characters.
-        if (to >= unicode::NonBMPMin) return true;
+        if (to >= kNonBmpStart) return true;
         // Check for lone surrogates.
-        if (from <= unicode::TrailSurrogateMax && to >= unicode::LeadSurrogateMin) return true;
+        if (from <= kTrailSurrogateEnd && to >= kLeadSurrogateStart) return true;
     }
     return false;
 }
 
 
 bool RegExpBuilder::NeedsDesugaringForIgnoreCase(uc32 c) {
+    // TODO(anba): Use ICU
     if (unicode() && ignore_case()) {
-        return unicode::HasCaseFold(c);
+        return unicode::HasCaseFold(static_cast<uint32_t>(c));
     }
     return false;
 }

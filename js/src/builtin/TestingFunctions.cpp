@@ -4493,7 +4493,8 @@ ConvertRegExpTreeToObject(JSContext* cx, irregexp::RegExpTree* tree)
 
     auto CharVectorProp = [](JSContext* cx, HandleObject obj,
                              const char* name, const irregexp::CharacterVector& data) {
-        RootedString valueStr(cx, JS_NewUCStringCopyN(cx, data.begin(), data.length()));
+        const char16_t* dataChars = reinterpret_cast<const char16_t*>(data.begin());
+        RootedString valueStr(cx, JS_NewUCStringCopyN(cx, dataChars, data.length()));
         if (!valueStr)
             return false;
 

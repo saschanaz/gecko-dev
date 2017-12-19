@@ -1142,14 +1142,7 @@ RegExpShared::execute(JSContext* cx, MutableHandleRegExpShared re, HandleLinearS
         RegExpRunStatus result;
         {
             AutoTraceLog logJIT(logger, TraceLogger_IrregexpExecute);
-            AutoCheckCannotGC nogc;
-            if (input->hasLatin1Chars()) {
-                const Latin1Char* chars = input->latin1Chars(nogc);
-                result = irregexp::ExecuteCode(cx, code, chars, start, length, matches, endIndex);
-            } else {
-                const char16_t* chars = input->twoByteChars(nogc);
-                result = irregexp::ExecuteCode(cx, code, chars, start, length, matches, endIndex);
-            }
+            result = irregexp::ExecuteCode(cx, code, input, start, matches, endIndex);
         }
 
         if (result == RegExpRunStatus_Error) {
@@ -1180,19 +1173,7 @@ RegExpShared::execute(JSContext* cx, MutableHandleRegExpShared re, HandleLinearS
     uint8_t* byteCode = re->compilation(mode, input->hasLatin1Chars()).byteCode;
     AutoTraceLog logInterpreter(logger, TraceLogger_IrregexpExecute);
 
-    AutoStableStringChars inputChars(cx);
-    if (!inputChars.init(cx, input))
-        return RegExpRunStatus_Error;
-
-    RegExpRunStatus result;
-    if (inputChars.isLatin1()) {
-        const Latin1Char* chars = inputChars.latin1Range().begin().get();
-        result = irregexp::InterpretCode(cx, byteCode, chars, start, length, matches, endIndex);
-    } else {
-        const char16_t* chars = inputChars.twoByteRange().begin().get();
-        result = irregexp::InterpretCode(cx, byteCode, chars, start, length, matches, endIndex);
-    }
-
+    RegExpRunStatus result = irregexp::InterpretCode(cx, byteCode, input, start, matches, endIndex);
     if (result == RegExpRunStatus_Success && matches)
         matches->checkAgainst(length);
     return result;

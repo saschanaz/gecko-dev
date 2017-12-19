@@ -676,7 +676,7 @@ NativeRegExpMacroAssembler::CheckNotCharacterAfterAnd(unsigned c, unsigned and_w
 }
 
 void
-NativeRegExpMacroAssembler::CheckCharacterGT(char16_t c, Label* on_greater)
+NativeRegExpMacroAssembler::CheckCharacterGT(uc16 c, Label* on_greater)
 {
     JitSpew(SPEW_PREFIX "CheckCharacterGT(%d)", (int) c);
     masm.branch32(Assembler::GreaterThan, current_character, Imm32(c),
@@ -684,7 +684,7 @@ NativeRegExpMacroAssembler::CheckCharacterGT(char16_t c, Label* on_greater)
 }
 
 void
-NativeRegExpMacroAssembler::CheckCharacterLT(char16_t c, Label* on_less)
+NativeRegExpMacroAssembler::CheckCharacterLT(uc16 c, Label* on_less)
 {
     JitSpew(SPEW_PREFIX "CheckCharacterLT(%d)", (int) c);
     masm.branch32(Assembler::LessThan, current_character, Imm32(c), BranchOrBacktrack(on_less));
@@ -923,7 +923,7 @@ NativeRegExpMacroAssembler::CheckNotBackReferenceIgnoreCase(int start_reg,
 }
 
 void
-NativeRegExpMacroAssembler::CheckNotCharacterAfterMinusAnd(char16_t c, char16_t minus, char16_t and_with,
+NativeRegExpMacroAssembler::CheckNotCharacterAfterMinusAnd(uc16 c, uc16 minus, uc16 and_with,
                                                            Label* on_not_equal)
 {
     JitSpew(SPEW_PREFIX "CheckNotCharacterAfterMinusAnd(%d, %d, %d)", (int) c,
@@ -940,7 +940,7 @@ NativeRegExpMacroAssembler::CheckNotCharacterAfterMinusAnd(char16_t c, char16_t 
 }
 
 void
-NativeRegExpMacroAssembler::CheckCharacterInRange(char16_t from, char16_t to,
+NativeRegExpMacroAssembler::CheckCharacterInRange(uc16 from, uc16 to,
                                                   Label* on_in_range)
 {
     JitSpew(SPEW_PREFIX "CheckCharacterInRange(%d, %d)", (int) from, (int) to);
@@ -950,7 +950,7 @@ NativeRegExpMacroAssembler::CheckCharacterInRange(char16_t from, char16_t to,
 }
 
 void
-NativeRegExpMacroAssembler::CheckCharacterNotInRange(char16_t from, char16_t to,
+NativeRegExpMacroAssembler::CheckCharacterNotInRange(uc16 from, uc16 to,
                                                      Label* on_not_in_range)
 {
     JitSpew(SPEW_PREFIX "CheckCharacterNotInRange(%d, %d)", (int) from, (int) to);
@@ -1300,7 +1300,7 @@ NativeRegExpMacroAssembler::JumpOrBacktrack(Label* to)
 }
 
 bool
-NativeRegExpMacroAssembler::CheckSpecialCharacterClass(char16_t type, Label* on_no_match)
+NativeRegExpMacroAssembler::CheckSpecialCharacterClass(uc16 type, Label* on_no_match)
 {
     JitSpew(SPEW_PREFIX "CheckSpecialCharacterClass(%d)", (int) type);
 

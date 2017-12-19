@@ -901,13 +901,13 @@ void ChoiceNode::GenerateGuard(RegExpMacroAssembler* macro_assembler,
 
 static MOZ_ALWAYS_INLINE int
 GetCaseIndependentLetters(bool one_byte_subject,
-                          const char16_t* choices,
+                          const uc16* choices,
                           size_t choices_length,
                           unibrow::uchar* letters)
 {
     size_t count = 0;
     for (size_t i = 0; i < choices_length; i++) {
-        char16_t c = choices[i];
+        uc16 c = choices[i];
 
         // Skip characters that can't appear in one byte strings.
         if (one_byte_subject && c > String::kMaxOneByteCharCode)
@@ -964,7 +964,7 @@ static int GetCaseIndependentLetters(uc16 character,
             other3 = character;
     }
 
-    const char16_t choices[] = {
+    const uc16 choices[] = {
         character,
         upper,
         other1,
@@ -976,13 +976,13 @@ static int GetCaseIndependentLetters(uc16 character,
 }
 
 static int
-GetCaseIndependentLetters(char16_t character,
+GetCaseIndependentLetters(uc16 character,
                           bool one_byte_subject,
                           bool unicode,
-                          char16_t* letters)
+                          unibrow::uchar* letters)
 {
     if (unicode) {
-        const char16_t choices[] = {
+        const uc16 choices[] = {
             character,
             unicode::FoldCase(character),
             unicode::ReverseFoldCase1(character),
@@ -2184,7 +2184,7 @@ RegExpNode* TextNode::FilterOneByte(int depth, bool ignore_case) {
                 if (!ignore_case) return set_replacement(NULL);
                 // Here, we need to check for characters whose upper and lower cases
                 // are outside the Latin-1 range.
-                char16_t converted = ConvertNonLatin1ToLatin1(c);
+                uint16_t converted = ConvertNonLatin1ToLatin1(c);
                 // Character is outside Latin-1 completely
                 if (converted == 0) return set_replacement(NULL);
                 // Convert quark to Latin-1 in place.
@@ -5317,9 +5317,9 @@ irregexp::CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompile
 }
 
 template <typename CharT>
-RegExpRunStatus
-irregexp::ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const CharT* chars, size_t start,
-                      size_t length, MatchPairs* matches, size_t* endIndex)
+static RegExpRunStatus
+ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const CharT* chars, size_t start,
+            size_t length, MatchPairs* matches, size_t* endIndex)
 {
     typedef void (*RegExpCodeSignature)(InputOutputData*);
 
@@ -5335,10 +5335,18 @@ irregexp::ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const CharT* chars
     return (RegExpRunStatus) data.result;
 }
 
-template RegExpRunStatus
-irregexp::ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const Latin1Char* chars, size_t start,
-                      size_t length, MatchPairs* matches, size_t* endIndex);
-
-template RegExpRunStatus
-irregexp::ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const char16_t* chars, size_t start,
-                      size_t length, MatchPairs* matches, size_t* endIndex);
+RegExpRunStatus
+irregexp::ExecuteCode(JSContext* cx, jit::JitCode* codeBlock,
+                      HandleLinearString input, size_t start,
+                      MatchPairs* matches, size_t* endIndex)
+{
+    size_t length = input->length();
+    JS::AutoCheckCannotGC nogc;
+    if (input->hasLatin1Chars()) {
+        const Latin1Char* chars = input->latin1Chars(nogc);
+        return ExecuteCode(cx, codeBlock, chars, start, length, matches, endIndex);
+    } else {
+        const char16_t* chars = input->twoByteChars(nogc);
+        return ExecuteCode(cx, codeBlock, chars, start, length, matches, endIndex);
+    }
+}

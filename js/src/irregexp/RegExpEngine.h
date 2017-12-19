@@ -1246,15 +1246,15 @@ CompilePattern(JSContext* cx, HandleRegExpShared shared, RegExpCompileData* data
 
 // Note: this may return RegExpRunStatus_Error if an interrupt was requested
 // while the code was executing.
-template <typename CharT>
 RegExpRunStatus
-ExecuteCode(JSContext* cx, jit::JitCode* codeBlock, const CharT* chars, size_t start,
-            size_t length, MatchPairs* matches, size_t* endIndex);
+ExecuteCode(JSContext* cx, jit::JitCode* codeBlock,
+            HandleLinearString input, size_t start,
+            MatchPairs* matches, size_t* endIndex);
 
-template <typename CharT>
 RegExpRunStatus
-InterpretCode(JSContext* cx, const uint8_t* byteCode, const CharT* chars, size_t start,
-              size_t length, MatchPairs* matches, size_t* endIndex);
+InterpretCode(JSContext* cx, const uint8_t* byteCode,
+              HandleLinearString input, size_t start,
+              MatchPairs* matches, size_t* endIndex);
 
 } }  // namespace js::irregexp
 

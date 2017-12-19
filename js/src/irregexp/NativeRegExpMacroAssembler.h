@@ -102,8 +102,8 @@ class MOZ_STACK_CLASS NativeRegExpMacroAssembler final : public RegExpMacroAssem
     void CheckAtStart(jit::Label* on_at_start);
     void CheckCharacter(unsigned c, jit::Label* on_equal);
     void CheckCharacterAfterAnd(unsigned c, unsigned and_with, jit::Label* on_equal);
-    void CheckCharacterGT(char16_t limit, jit::Label* on_greater);
-    void CheckCharacterLT(char16_t limit, jit::Label* on_less);
+    void CheckCharacterGT(uc16 limit, jit::Label* on_greater);
+    void CheckCharacterLT(uc16 limit, jit::Label* on_less);
     void CheckGreedyLoop(jit::Label* on_tos_equals_current_position);
     void CheckNotAtStart(int cp_offset, jit::Label* on_not_at_start);
     void CheckNotBackReference(int start_reg, bool read_backward,
@@ -113,16 +113,16 @@ class MOZ_STACK_CLASS NativeRegExpMacroAssembler final : public RegExpMacroAssem
                                          jit::Label* on_no_match);
     void CheckNotCharacter(unsigned c, jit::Label* on_not_equal);
     void CheckNotCharacterAfterAnd(unsigned c, unsigned and_with, jit::Label* on_not_equal);
-    void CheckNotCharacterAfterMinusAnd(char16_t c, char16_t minus, char16_t and_with,
+    void CheckNotCharacterAfterMinusAnd(uc16 c, uc16 minus, uc16 and_with,
                                         jit::Label* on_not_equal);
-    void CheckCharacterInRange(char16_t from, char16_t to,
+    void CheckCharacterInRange(uc16 from, uc16 to,
                                jit::Label* on_in_range);
-    void CheckCharacterNotInRange(char16_t from, char16_t to,
+    void CheckCharacterNotInRange(uc16 from, uc16 to,
                                   jit::Label* on_not_in_range);
     void CheckBitInTable(RegExpShared::JitCodeTable table, jit::Label* on_bit_set);
     void CheckPosition(int cp_offset, jit::Label* on_outside_input);
     void JumpOrBacktrack(jit::Label* to);
-    bool CheckSpecialCharacterClass(char16_t type, jit::Label* on_no_match);
+    bool CheckSpecialCharacterClass(uc16 type, jit::Label* on_no_match);
     void Fail();
     void IfRegisterGE(int reg, int comparand, jit::Label* if_ge);
     void IfRegisterLT(int reg, int comparand, jit::Label* if_lt);

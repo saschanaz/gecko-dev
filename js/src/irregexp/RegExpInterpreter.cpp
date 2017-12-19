@@ -145,24 +145,28 @@ static bool BackRefMatchesNoCase(int from, int current,
     return true;
 }
 
-static int32_t Load32Aligned(const uint8_t* pc) {
-    DCHECK((reinterpret_cast<uintptr_t>(pc) & 3) == 0);
+static int32_t Load32Aligned(const byte* pc) {
+    DCHECK((reinterpret_cast<intptr_t>(pc) & 3) == 0);
     return *reinterpret_cast<const int32_t*>(pc);
 }
 
-static int32_t Load16Aligned(const uint8_t* pc) {
-    DCHECK((reinterpret_cast<uintptr_t>(pc) & 1) == 0);
+static int32_t Load16Aligned(const byte* pc) {
+    DCHECK((reinterpret_cast<intptr_t>(pc) & 1) == 0);
     return *reinterpret_cast<const uint16_t*>(pc);
 }
 
 #define BYTECODE(name)  case BC_##name:
 
 template <typename CharT>
-RegExpRunStatus
-irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* subject, size_t current,
-                        size_t length, MatchPairs* matches, size_t* endIndex)
+static RegExpRunStatus RawMatch(JSContext* cx,
+                                const byte* code_base,
+                                const CharT* subject,
+                                int current,
+                                int length,
+                                MatchPairs* matches,
+                                size_t* endIndex)
 {
-    const uint8_t* pc = code_base;
+    const byte* pc = code_base;
 
     uint32_t current_char = current ? subject[current - 1] : '\n';
 
@@ -265,7 +269,7 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             pc = code_base + Load32Aligned(pc + 4);
             break;
           BYTECODE(CHECK_GREEDY)
-            if ((int32_t)current == stack.peek()) {
+            if (current == stack.peek()) {
                 stack.pop();
                 pc = code_base + Load32Aligned(pc + 4);
             } else {
@@ -273,8 +277,8 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             }
             break;
           BYTECODE(LOAD_CURRENT_CHAR) {
-            size_t pos = current + (insn >> BYTECODE_SHIFT);
-            if (pos >= length) {
+            int pos = current + (insn >> BYTECODE_SHIFT);
+            if (pos >= length || pos < 0) {
                 pc = code_base + Load32Aligned(pc + 4);
             } else {
                 current_char = subject[pos];
@@ -289,8 +293,8 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             break;
           }
           BYTECODE(LOAD_2_CURRENT_CHARS) {
-            size_t pos = current + (insn >> BYTECODE_SHIFT);
-            if (pos + 2 > length) {
+            int pos = current + (insn >> BYTECODE_SHIFT);
+            if (pos + 2 > length || pos < 0) {
                 pc = code_base + Load32Aligned(pc + 4);
             } else {
                 CharT next = subject[pos + 1];
@@ -302,9 +306,8 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
           }
           BYTECODE(LOAD_2_CURRENT_CHARS_UNCHECKED) {
             int pos = current + (insn >> BYTECODE_SHIFT);
-            // TODO(anba): Use CharT instead of char16_t?
-            char16_t next = subject[pos + 1];
-            current_char = (subject[pos] | (next << (kBitsPerByte * sizeof(char16_t))));
+            CharT next = subject[pos + 1];
+            current_char = (subject[pos] | (next << (kBitsPerByte * sizeof(CharT))));
             pc += BC_LOAD_2_CURRENT_CHARS_UNCHECKED_LENGTH;
             break;
           }
@@ -417,7 +420,7 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
           }
           BYTECODE(CHECK_BIT_IN_TABLE) {
             int mask = RegExpMacroAssembler::kTableMask;
-            uint8_t b = pc[8 + ((current_char & mask) >> kBitsPerByteLog2)];
+            byte b = pc[8 + ((current_char & mask) >> kBitsPerByteLog2)];
             int bit = (current_char & (kBitsPerByte - 1));
             if ((b & (1 << bit)) != 0) {
                 pc = code_base + Load32Aligned(pc + 4);
@@ -459,7 +462,7 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             }
             break;
           BYTECODE(CHECK_REGISTER_EQ_POS)
-            if (registers[insn >> BYTECODE_SHIFT] == (int32_t) current) {
+            if (registers[insn >> BYTECODE_SHIFT] == current) {
                 pc = code_base + Load32Aligned(pc + 4);
             } else {
                 pc += BC_CHECK_REGISTER_EQ_POS_LENGTH;
@@ -491,7 +494,6 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             int from = registers[insn >> BYTECODE_SHIFT];
             int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
             if (from >= 0 && len > 0) {
-                // TODO(anba): current is size_t for SM, but int for V8.
                 if (current - len < 0 ||
                     ::CompareChars(subject + from, subject + (current - len), len) != 0) {
                     pc = code_base + Load32Aligned(pc + 4);
@@ -527,7 +529,6 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             int from = registers[insn >> BYTECODE_SHIFT];
             int len = registers[(insn >> BYTECODE_SHIFT) + 1] - from;
             if (from >= 0 && len > 0) {
-                // TODO(anba): current is size_t for SM, but int for V8.
                 if (current - len < 0 ||
                     !BackRefMatchesNoCase(from, current - len, len, subject,
                                           unicode)) {
@@ -554,7 +555,7 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
             }
             break;
           BYTECODE(SET_CURRENT_POSITION_FROM_END) {
-            size_t by = static_cast<uint32_t>(insn) >> BYTECODE_SHIFT;
+            int by = static_cast<uint32_t>(insn) >> BYTECODE_SHIFT;
             if (length - current > by) {
                 current = length - by;
                 current_char = subject[current - 1];
@@ -568,10 +569,24 @@ irregexp::InterpretCode(JSContext* cx, const uint8_t* code_base, const CharT* su
     }
 }
 
-template RegExpRunStatus
-irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const Latin1Char* chars, size_t current,
-                        size_t length, MatchPairs* matches, size_t* endIndex);
+RegExpRunStatus
+irregexp::InterpretCode(JSContext* cx,
+                        const uint8_t* byteCode,
+                        HandleLinearString input,
+                        size_t start,
+                        MatchPairs* matches,
+                        size_t* endIndex)
+{
+    size_t length = input->length();
+    AutoStableStringChars inputChars(cx);
+    if (!inputChars.init(cx, input))
+        return RegExpRunStatus_Error;
 
-template RegExpRunStatus
-irregexp::InterpretCode(JSContext* cx, const uint8_t* byteCode, const char16_t* chars, size_t current,
-                        size_t length, MatchPairs* matches, size_t* endIndex);
+    if (inputChars.isLatin1()) {
+        const Latin1Char* chars = inputChars.latin1Range().begin().get();
+        return RawMatch(cx, byteCode, chars, start, length, matches, endIndex);
+    } else {
+        const char16_t* chars = inputChars.twoByteRange().begin().get();
+        return RawMatch(cx, byteCode, chars, start, length, matches, endIndex);
+    }
+}

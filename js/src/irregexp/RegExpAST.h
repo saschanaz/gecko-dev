@@ -130,9 +130,7 @@ class CharacterRange {
         return CharacterRange(value, value);
     }
     static inline CharacterRange Range(uc32 from, uc32 to) {
-        // TODO(anba): Enable complete assertions.
-        // DCHECK(0 <= from && to <= String::kMaxCodePoint);
-        DCHECK(to <= String::kMaxCodePoint);
+        DCHECK(0 <= from && to <= String::kMaxCodePoint);
         DCHECK(static_cast<uint32_t>(from) <= static_cast<uint32_t>(to));
         return CharacterRange(from, to);
     }

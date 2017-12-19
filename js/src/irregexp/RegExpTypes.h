@@ -62,9 +62,9 @@ namespace irregexp {
     ClassName(const ClassName&) = default; \
     ClassName& operator=(const ClassName&) = delete;
 
-// TODO(anba): Decide on types.
-using uc16 = char16_t; // upstream: uint16_t
-using uc32 = uint32_t; // upstream: int32_t
+using byte = uint8_t;
+using uc16 = uint16_t;
+using uc32 = int32_t;
 
 constexpr int32_t kMinInt = INT32_MIN;
 constexpr int32_t kMaxInt = INT32_MAX;
@@ -72,7 +72,7 @@ constexpr int32_t kMaxInt = INT32_MAX;
 namespace String {
     constexpr int32_t kMaxOneByteCharCode = 0xff;
     constexpr uint32_t kMaxOneByteCharCodeU = 0xff;
-    constexpr uc32 /* TODO(anba): Change back to int32_t*/ kMaxUtf16CodeUnit = 0xffff;
+    constexpr int32_t kMaxUtf16CodeUnit = 0xffff;
     constexpr int32_t kMaxCodePoint = 0x10ffff;
 }
 
@@ -84,8 +84,13 @@ namespace unibrow {
     }
 
     namespace Utf16 {
+        static const uint32_t kMaxNonSurrogateCharCode = 0xffff;
+
+        static constexpr auto& IsLeadSurrogate = unicode::IsLeadSurrogate;
+        static constexpr auto& IsTrailSurrogate = unicode::IsTrailSurrogate;
         static constexpr auto& LeadSurrogate = unicode::LeadSurrogate;
         static constexpr auto& TrailSurrogate = unicode::TrailSurrogate;
+        static constexpr auto& CombineSurrogatePair = unicode::UTF16Decode;
     }
 }
 
