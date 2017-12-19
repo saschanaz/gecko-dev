@@ -45,6 +45,8 @@ namespace frontend {
 
 namespace irregexp {
 
+struct RegExpCompileData;
+
 extern bool
 ParsePattern(frontend::TokenStreamAnyChars& ts, LifoAlloc& alloc, JSAtom* str,
              bool multiline, bool match_only, bool unicode, bool ignore_case,

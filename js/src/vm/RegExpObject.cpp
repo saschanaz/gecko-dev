@@ -20,6 +20,7 @@
 #ifdef DEBUG
 #include "irregexp/RegExpBytecode.h"
 #endif
+#include "irregexp/RegExpEngine.h"
 #include "irregexp/RegExpParser.h"
 #include "util/StringBuffer.h"
 #include "vm/MatchPairs.h"

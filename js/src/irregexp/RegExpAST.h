@@ -31,6 +31,9 @@
 #ifndef V8_REGEXP_AST_H_
 #define V8_REGEXP_AST_H_
 
+#include "ds/LifoAlloc.h"
+#include "js/Vector.h"
+
 // Prevent msvc build failures as indicated in bug 1205328
 #ifdef min
 # undef min
@@ -39,13 +42,29 @@
 # undef max
 #endif
 
-#include "irregexp/RegExpEngine.h"
-
 namespace js {
 namespace irregexp {
 
+#define FOR_EACH_REG_EXP_TREE_TYPE(VISIT)                            \
+  VISIT(Disjunction)                                                 \
+  VISIT(Alternative)                                                 \
+  VISIT(Assertion)                                                   \
+  VISIT(CharacterClass)                                              \
+  VISIT(Atom)                                                        \
+  VISIT(Quantifier)                                                  \
+  VISIT(Capture)                                                     \
+  VISIT(Lookahead)                                                   \
+  VISIT(BackReference)                                               \
+  VISIT(Empty)                                                       \
+  VISIT(Text)
+
+#define FORWARD_DECLARE(Name) class RegExp##Name;
+FOR_EACH_REG_EXP_TREE_TYPE(FORWARD_DECLARE)
+#undef FORWARD_DECLARE
+
 class RegExpCompiler;
 class RegExpNode;
+class RegExpTree;
 
 class RegExpVisitor
 {
@@ -56,6 +75,211 @@ class RegExpVisitor
     FOR_EACH_REG_EXP_TREE_TYPE(MAKE_CASE)
 #undef MAKE_CASE
 };
+
+// InfallibleVector is like Vector, but all its methods are infallible (they
+// crash on OOM). We use this class instead of Vector to avoid a ton of
+// MOZ_MUST_USE warnings in irregexp code (imported from V8).
+template<typename T, size_t N>
+class InfallibleVector
+{
+    Vector<T, N, LifoAllocPolicy<Infallible>> vector_;
+
+    InfallibleVector(const InfallibleVector&) = delete;
+    void operator=(const InfallibleVector&) = delete;
+
+  public:
+    explicit InfallibleVector(const LifoAllocPolicy<Infallible>& alloc) : vector_(alloc) {}
+
+    void append(const T& t) { MOZ_ALWAYS_TRUE(vector_.append(t)); }
+    void append(const T* begin, size_t length) { MOZ_ALWAYS_TRUE(vector_.append(begin, length)); }
+
+    void clear() { vector_.clear(); }
+    void popBack() { vector_.popBack(); }
+    void reserve(size_t n) { MOZ_ALWAYS_TRUE(vector_.reserve(n)); }
+
+    size_t length() const { return vector_.length(); }
+    T popCopy() { return vector_.popCopy(); }
+
+    T* begin() { return vector_.begin(); }
+    const T* begin() const { return vector_.begin(); }
+
+    T& operator[](size_t index) { return vector_[index]; }
+    const T& operator[](size_t index) const { return vector_[index]; }
+
+    InfallibleVector& operator=(InfallibleVector&& rhs) { vector_ = Move(rhs.vector_); return *this; }
+};
+
+// A simple closed interval.
+class Interval
+{
+  public:
+    Interval() : from_(kNone), to_(kNone) { }
+
+    Interval(int from, int to) : from_(from), to_(to) { }
+
+    Interval Union(Interval that) {
+        if (that.from_ == kNone)
+            return *this;
+        else if (from_ == kNone)
+            return that;
+        else
+            return Interval(Min(from_, that.from_), Max(to_, that.to_));
+    }
+
+    bool Contains(int value) {
+        return (from_ <= value) && (value <= to_);
+    }
+
+    bool is_empty() { return from_ == kNone; }
+
+    int from() const { return from_; }
+    int to() const { return to_; }
+
+    static Interval Empty() { return Interval(); }
+    static const int kNone = -1;
+
+  private:
+    int from_;
+    int to_;
+};
+
+class CharacterRange;
+typedef InfallibleVector<CharacterRange, 1> CharacterRangeVector;
+
+// Represents code units in the range from from_ to to_, both ends are
+// inclusive.
+class CharacterRange
+{
+  public:
+    CharacterRange()
+      : from_(0), to_(0)
+    {}
+
+    CharacterRange(char16_t from, char16_t to)
+      : from_(from), to_(to)
+    {}
+
+    static void AddClassEscape(LifoAlloc* alloc, char16_t type, CharacterRangeVector* ranges);
+    static void AddClassEscapeUnicode(LifoAlloc* alloc, char16_t type,
+                                      CharacterRangeVector* ranges, bool ignoreCase);
+
+    static inline CharacterRange Singleton(char16_t value) {
+        return CharacterRange(value, value);
+    }
+    static inline CharacterRange Range(char16_t from, char16_t to) {
+        MOZ_ASSERT(from <= to);
+        return CharacterRange(from, to);
+    }
+    static inline CharacterRange Everything() {
+        return CharacterRange(0, 0xFFFF);
+    }
+    bool Contains(char16_t i) { return from_ <= i && i <= to_; }
+    char16_t from() const { return from_; }
+    void set_from(char16_t value) { from_ = value; }
+    char16_t to() const { return to_; }
+    void set_to(char16_t value) { to_ = value; }
+    bool is_valid() { return from_ <= to_; }
+    bool IsEverything(char16_t max) { return from_ == 0 && to_ >= max; }
+    bool IsSingleton() { return (from_ == to_); }
+    void AddCaseEquivalents(bool is_latin1, bool unicode, CharacterRangeVector* ranges);
+
+    static void Split(const LifoAlloc* alloc,
+                      CharacterRangeVector base,
+                      const Vector<int>& overlay,
+                      CharacterRangeVector* included,
+                      CharacterRangeVector* excluded);
+
+    // Whether a range list is in canonical form: Ranges ordered by from value,
+    // and ranges non-overlapping and non-adjacent.
+    static bool IsCanonical(const CharacterRangeVector& ranges);
+
+    // Convert range list to canonical form. The characters covered by the ranges
+    // will still be the same, but no character is in more than one range, and
+    // adjacent ranges are merged. The resulting list may be shorter than the
+    // original, but cannot be longer.
+    static void Canonicalize(CharacterRangeVector& ranges);
+
+    // Negate the contents of a character range in canonical form.
+    static void Negate(const LifoAlloc* alloc,
+                       CharacterRangeVector src,
+                       CharacterRangeVector* dst);
+
+    static const int kStartMarker = (1 << 24);
+    static const int kPayloadMask = (1 << 24) - 1;
+
+  private:
+    char16_t from_;
+    char16_t to_;
+};
+
+class CharacterSet
+{
+  public:
+    explicit CharacterSet(char16_t standard_set_type)
+      : ranges_(nullptr),
+        standard_set_type_(standard_set_type)
+    {}
+    explicit CharacterSet(CharacterRangeVector* ranges)
+      : ranges_(ranges),
+        standard_set_type_(0)
+    {}
+
+    CharacterRangeVector& ranges(LifoAlloc* alloc);
+    char16_t standard_set_type() { return standard_set_type_; }
+    void set_standard_set_type(char16_t special_set_type) {
+        standard_set_type_ = special_set_type;
+    }
+    bool is_standard() { return standard_set_type_ != 0; }
+    void Canonicalize();
+
+  private:
+    CharacterRangeVector* ranges_;
+
+    // If non-zero, the value represents a standard set (e.g., all whitespace
+    // characters) without having to expand the ranges.
+    char16_t standard_set_type_;
+};
+
+class TextElement
+{
+  public:
+    enum TextType {
+        ATOM,
+        CHAR_CLASS
+    };
+
+    static TextElement Atom(RegExpAtom* atom);
+    static TextElement CharClass(RegExpCharacterClass* char_class);
+
+    int cp_offset() const { return cp_offset_; }
+    void set_cp_offset(int cp_offset) { cp_offset_ = cp_offset; }
+    int length() const;
+
+    TextType text_type() const { return text_type_; }
+
+    RegExpTree* tree() const { return tree_; }
+
+    RegExpAtom* atom() const {
+        MOZ_ASSERT(text_type() == ATOM);
+        return reinterpret_cast<RegExpAtom*>(tree());
+    }
+
+    RegExpCharacterClass* char_class() const {
+        MOZ_ASSERT(text_type() == CHAR_CLASS);
+        return reinterpret_cast<RegExpCharacterClass*>(tree());
+    }
+
+  private:
+    TextElement(TextType text_type, RegExpTree* tree)
+      : cp_offset_(-1), text_type_(text_type), tree_(tree)
+    {}
+
+    int cp_offset_;
+    TextType text_type_;
+    RegExpTree* tree_;
+};
+
+typedef InfallibleVector<TextElement, 1> TextElementVector;
 
 class RegExpTree
 {
@@ -155,34 +379,6 @@ class RegExpAssertion : public RegExpTree {
   AssertionType assertion_type() { return assertion_type_; }
  private:
   AssertionType assertion_type_;
-};
-
-class CharacterSet
-{
-  public:
-    explicit CharacterSet(char16_t standard_set_type)
-      : ranges_(nullptr),
-        standard_set_type_(standard_set_type)
-    {}
-    explicit CharacterSet(CharacterRangeVector* ranges)
-      : ranges_(ranges),
-        standard_set_type_(0)
-    {}
-
-    CharacterRangeVector& ranges(LifoAlloc* alloc);
-    char16_t standard_set_type() { return standard_set_type_; }
-    void set_standard_set_type(char16_t special_set_type) {
-        standard_set_type_ = special_set_type;
-    }
-    bool is_standard() { return standard_set_type_ != 0; }
-    void Canonicalize();
-
-  private:
-    CharacterRangeVector* ranges_;
-
-    // If non-zero, the value represents a standard set (e.g., all whitespace
-    // characters) without having to expand the ranges.
-    char16_t standard_set_type_;
 };
 
 class RegExpCharacterClass : public RegExpTree

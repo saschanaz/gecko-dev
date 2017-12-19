@@ -45,478 +45,6 @@ using namespace js::irregexp;
 using mozilla::Move;
 using mozilla::PointerRangeSize;
 
-// ----------------------------------------------------------------------------
-// RegExpBuilder
-
-RegExpBuilder::RegExpBuilder(LifoAlloc* alloc)
-  : alloc(alloc),
-    pending_empty_(false),
-    characters_(nullptr)
-#ifdef DEBUG
-  , last_added_(ADD_NONE)
-#endif
-{}
-
-void
-RegExpBuilder::FlushCharacters()
-{
-    pending_empty_ = false;
-    if (characters_ != nullptr) {
-        RegExpTree* atom = alloc->newInfallible<RegExpAtom>(characters_);
-        characters_ = nullptr;
-        text_.Add(alloc, atom);
-#ifdef DEBUG
-        last_added_ = ADD_ATOM;
-#endif
-    }
-}
-
-void
-RegExpBuilder::FlushText()
-{
-    FlushCharacters();
-    int num_text = text_.length();
-    if (num_text == 0)
-        return;
-    if (num_text == 1) {
-        terms_.Add(alloc, text_.last());
-    } else {
-        RegExpText* text = alloc->newInfallible<RegExpText>(alloc);
-        for (int i = 0; i < num_text; i++)
-            text_.Get(i)->AppendToText(text);
-        terms_.Add(alloc, text);
-    }
-    text_.Clear();
-}
-
-void
-RegExpBuilder::AddCharacter(char16_t c)
-{
-    pending_empty_ = false;
-    if (characters_ == nullptr)
-        characters_ = alloc->newInfallible<CharacterVector>(*alloc);
-    characters_->append(c);
-#ifdef DEBUG
-    last_added_ = ADD_CHAR;
-#endif
-}
-
-void
-RegExpBuilder::AddEmpty()
-{
-    pending_empty_ = true;
-}
-
-void
-RegExpBuilder::AddAtom(RegExpTree* term)
-{
-    if (term->IsEmpty()) {
-        AddEmpty();
-        return;
-    }
-    if (term->IsTextElement()) {
-        FlushCharacters();
-        text_.Add(alloc, term);
-    } else {
-        FlushText();
-        terms_.Add(alloc, term);
-    }
-#ifdef DEBUG
-    last_added_ = ADD_ATOM;
-#endif
-}
-
-void
-RegExpBuilder::AddAssertion(RegExpTree* assert)
-{
-    FlushText();
-    if (terms_.length() > 0 && terms_.last()->IsAssertion()) {
-        // Omit repeated assertions of the same type.
-        RegExpAssertion* last = terms_.last()->AsAssertion();
-        RegExpAssertion* next = assert->AsAssertion();
-        if (last->assertion_type() == next->assertion_type()) return;
-    }
-    terms_.Add(alloc, assert);
-#ifdef DEBUG
-    last_added_ = ADD_ASSERT;
-#endif
-}
-
-void
-RegExpBuilder::NewAlternative()
-{
-    FlushTerms();
-}
-
-void
-RegExpBuilder::FlushTerms()
-{
-    FlushText();
-    int num_terms = terms_.length();
-    RegExpTree* alternative;
-    if (num_terms == 0)
-        alternative = RegExpEmpty::GetInstance();
-    else if (num_terms == 1)
-        alternative = terms_.last();
-    else
-        alternative = alloc->newInfallible<RegExpAlternative>(terms_.GetList(alloc));
-    alternatives_.Add(alloc, alternative);
-    terms_.Clear();
-#ifdef DEBUG
-    last_added_ = ADD_NONE;
-#endif
-}
-
-RegExpTree*
-RegExpBuilder::ToRegExp()
-{
-    FlushTerms();
-    int num_alternatives = alternatives_.length();
-    if (num_alternatives == 0) {
-        return RegExpEmpty::GetInstance();
-    }
-    if (num_alternatives == 1) {
-        return alternatives_.last();
-    }
-    return alloc->newInfallible<RegExpDisjunction>(alternatives_.GetList(alloc));
-}
-
-void
-RegExpBuilder::AddQuantifierToAtom(int min, int max,
-                                   RegExpQuantifier::QuantifierType quantifier_type)
-{
-    if (pending_empty_) {
-        pending_empty_ = false;
-        return;
-    }
-    RegExpTree* atom;
-    if (characters_ != nullptr) {
-        MOZ_ASSERT(last_added_ == ADD_CHAR);
-        // Last atom was character.
-        CharacterVector* char_vector = characters_;
-        int num_chars = char_vector->length();
-        if (num_chars > 1) {
-            CharacterVector* prefix = alloc->newInfallible<CharacterVector>(*alloc);
-            prefix->append(char_vector->begin(), num_chars - 1);
-            text_.Add(alloc, alloc->newInfallible<RegExpAtom>(prefix));
-            char_vector = alloc->newInfallible<CharacterVector>(*alloc);
-            char_vector->append((*characters_)[num_chars - 1]);
-        }
-        characters_ = nullptr;
-        atom = alloc->newInfallible<RegExpAtom>(char_vector);
-        FlushText();
-    } else if (text_.length() > 0) {
-        MOZ_ASSERT(last_added_ == ADD_ATOM);
-        atom = text_.RemoveLast();
-        FlushText();
-    } else if (terms_.length() > 0) {
-        MOZ_ASSERT(last_added_ == ADD_ATOM);
-        atom = terms_.RemoveLast();
-        if (atom->max_match() == 0) {
-            // Guaranteed to only match an empty string.
-#ifdef DEBUG
-            last_added_ = ADD_TERM;
-#endif
-            if (min == 0)
-                return;
-            terms_.Add(alloc, atom);
-            return;
-        }
-    } else {
-        // Only call immediately after adding an atom or character!
-        MOZ_CRASH("Bad call");
-    }
-    terms_.Add(alloc, alloc->newInfallible<RegExpQuantifier>(min, max, quantifier_type, atom));
-#ifdef DEBUG
-    last_added_ = ADD_TERM;
-#endif
-}
-
-// ----------------------------------------------------------------------------
-// RegExpParser
-
-template <typename CharT>
-RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, LifoAlloc* alloc,
-                                  const CharT* chars, const CharT* end, bool multiline_mode,
-                                  bool unicode, bool ignore_case)
-  : ts(ts),
-    alloc(alloc),
-    captures_(nullptr),
-    start_(chars),
-    next_pos_(start_),
-    end_(end),
-    current_(kEndMarker),
-    capture_count_(0),
-    has_more_(true),
-    multiline_(multiline_mode),
-    unicode_(unicode),
-    ignore_case_(ignore_case),
-    simple_(false),
-    contains_anchor_(false),
-    is_scanned_for_captures_(false)
-{
-    Advance();
-}
-
-template <typename CharT>
-void
-RegExpParser<CharT>::SyntaxError(unsigned errorNumber, ...)
-{
-    ErrorMetadata err;
-
-    ts.fillExcludingContext(&err, ts.currentToken().pos.begin);
-
-    // For most error reporting, the line of context derives from the token
-    // stream.  So when location information doesn't come from the token
-    // stream, we can't give a line of context.  But here the "line of context"
-    // can be (and is) derived from the pattern text, so we can provide it no
-    // matter if the location is derived from the caller.
-    size_t offset = PointerRangeSize(start_, next_pos_ - 1);
-    size_t end = PointerRangeSize(start_, end_);
-
-    const CharT* windowStart = (offset > ErrorMetadata::lineOfContextRadius)
-                               ? start_ + (offset - ErrorMetadata::lineOfContextRadius)
-                               : start_;
-
-    const CharT* windowEnd = (end - offset > ErrorMetadata::lineOfContextRadius)
-                             ? start_ + offset + ErrorMetadata::lineOfContextRadius
-                             : end_;
-
-    size_t windowLength = PointerRangeSize(windowStart, windowEnd);
-    MOZ_ASSERT(windowLength <= ErrorMetadata::lineOfContextRadius * 2);
-
-    // Create the windowed string, not including the potential line
-    // terminator.
-    StringBuffer windowBuf(ts.context());
-    if (!windowBuf.append(windowStart, windowEnd))
-        return;
-
-    // The line of context must be null-terminated, and StringBuffer doesn't
-    // make that happen unless we force it to.
-    if (!windowBuf.append('\0'))
-        return;
-
-    err.lineOfContext.reset(windowBuf.stealChars());
-    if (!err.lineOfContext)
-        return;
-
-    err.lineLength = windowLength;
-    err.tokenOffset = offset - (windowStart - start_);
-
-    va_list args;
-    va_start(args, errorNumber);
-
-    ReportCompileError(ts.context(), Move(err), nullptr, JSREPORT_ERROR, errorNumber, args);
-
-    va_end(args);
-}
-
-template <typename CharT>
-RegExpTree*
-RegExpParser<CharT>::ReportError(unsigned errorNumber, const char* param /* = nullptr */)
-{
-    gc::AutoSuppressGC suppressGC(ts.context());
-    SyntaxError(errorNumber, param);
-    return nullptr;
-}
-
-template <typename CharT>
-void
-RegExpParser<CharT>::Advance()
-{
-    if (next_pos_ < end_) {
-        current_ = *next_pos_;
-        next_pos_++;
-    } else {
-        current_ = kEndMarker;
-        next_pos_ = end_ + 1;
-        has_more_ = false;
-    }
-}
-
-// Returns the value (0 .. 15) of a hexadecimal character c.
-// If c is not a legal hexadecimal character, returns a value < 0.
-inline int
-HexValue(uint32_t c)
-{
-    c -= '0';
-    if (static_cast<unsigned>(c) <= 9) return c;
-    c = (c | 0x20) - ('a' - '0');  // detect 0x11..0x16 and 0x31..0x36.
-    if (static_cast<unsigned>(c) <= 5) return c + 10;
-    return -1;
-}
-
-template <typename CharT>
-widechar
-RegExpParser<CharT>::ParseOctalLiteral()
-{
-    MOZ_ASSERT('0' <= current() && current() <= '7');
-    // For compatibility with some other browsers (not all), we parse
-    // up to three octal digits with a value below 256.
-    widechar value = current() - '0';
-    Advance();
-    if ('0' <= current() && current() <= '7') {
-        value = value * 8 + current() - '0';
-        Advance();
-        if (value < 32 && '0' <= current() && current() <= '7') {
-            value = value * 8 + current() - '0';
-            Advance();
-        }
-    }
-    return value;
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseHexEscape(int length, widechar* value)
-{
-    const CharT* start = position();
-    uint32_t val = 0;
-    bool done = false;
-    for (int i = 0; !done; i++) {
-        widechar c = current();
-        int d = HexValue(c);
-        if (d < 0) {
-            Reset(start);
-            return false;
-        }
-        val = val * 16 + d;
-        Advance();
-        if (i == length - 1) {
-            done = true;
-        }
-    }
-    *value = val;
-    return true;
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseBracedHexEscape(widechar* value)
-{
-    MOZ_ASSERT(current() == '{');
-    Advance();
-
-    bool first = true;
-    uint32_t code = 0;
-    while (true) {
-        widechar c = current();
-        if (c == kEndMarker) {
-            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-            return false;
-        }
-        if (c == '}') {
-            if (first) {
-                ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-                return false;
-            }
-            Advance();
-            break;
-        }
-
-        int d = HexValue(c);
-        if (d < 0) {
-            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-            return false;
-        }
-        code = (code << 4) | d;
-        if (code > unicode::NonBMPMax) {
-            ReportError(JSMSG_UNICODE_OVERFLOW, "regular expression");
-            return false;
-        }
-        Advance();
-        first = false;
-    }
-
-    *value = code;
-    return true;
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseTrailSurrogate(widechar* value)
-{
-    if (current() != '\\')
-        return false;
-
-    const CharT* start = position();
-    Advance();
-    if (current() != 'u') {
-        Reset(start);
-        return false;
-    }
-    Advance();
-    if (!ParseHexEscape(4, value)) {
-        Reset(start);
-        return false;
-    }
-    if (!unicode::IsTrailSurrogate(*value)) {
-        Reset(start);
-        return false;
-    }
-    return true;
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseRawSurrogatePair(char16_t* lead, char16_t* trail)
-{
-    widechar c1 = current();
-    if (!unicode::IsLeadSurrogate(c1))
-        return false;
-
-    const CharT* start = position();
-    Advance();
-    widechar c2 = current();
-    if (!unicode::IsTrailSurrogate(c2)) {
-        Reset(start);
-        return false;
-    }
-    Advance();
-    *lead = c1;
-    *trail = c2;
-    return true;
-}
-
-static inline RegExpTree*
-RangeAtom(LifoAlloc* alloc, char16_t from, char16_t to)
-{
-    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    ranges->append(CharacterRange::Range(from, to));
-    return alloc->newInfallible<RegExpCharacterClass>(ranges, false);
-}
-
-static inline RegExpTree*
-NegativeLookahead(LifoAlloc* alloc, char16_t from, char16_t to)
-{
-    return alloc->newInfallible<RegExpLookahead>(RangeAtom(alloc, from, to), false, 0, 0);
-}
-
-static bool
-IsSyntaxCharacter(widechar c)
-{
-  switch (c) {
-    case '^':
-    case '$':
-    case '\\':
-    case '.':
-    case '*':
-    case '+':
-    case '?':
-    case '(':
-    case ')':
-    case '[':
-    case ']':
-    case '{':
-    case '}':
-    case '|':
-    case '/':
-      return true;
-    default:
-      return false;
-  }
-}
-
 inline bool
 IsInRange(int value, int lower_limit, int higher_limit)
 {
@@ -532,166 +60,21 @@ IsDecimalDigit(widechar c)
     return IsInRange(c, '0', '9');
 }
 
-#ifdef DEBUG
-// Currently only used in an assert.kASSERT.
-static bool
-IsSpecialClassEscape(widechar c)
-{
-  switch (c) {
-    case 'd': case 'D':
-    case 's': case 'S':
-    case 'w': case 'W':
-      return true;
-    default:
-      return false;
-  }
-}
-#endif
+// ----------------------------------------------------------------------------
+// SpiderMonkey implementation for Unicode RegExps
 
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseClassCharacterEscape(widechar* code)
+static inline RegExpTree*
+RangeAtom(LifoAlloc* alloc, char16_t from, char16_t to)
 {
-    MOZ_ASSERT(current() == '\\');
-    MOZ_ASSERT(has_next() && !IsSpecialClassEscape(Next()));
-    Advance();
-    switch (current()) {
-      case 'b':
-        Advance();
-        *code = '\b';
-        return true;
-      // ControlEscape :: one of
-      //   f n r t v
-      case 'f':
-        Advance();
-        *code = '\f';
-        return true;
-      case 'n':
-        Advance();
-        *code = '\n';
-        return true;
-      case 'r':
-        Advance();
-        *code = '\r';
-        return true;
-      case 't':
-        Advance();
-        *code = '\t';
-        return true;
-      case 'v':
-        Advance();
-        *code = '\v';
-        return true;
-      case 'c': {
-        widechar controlLetter = Next();
-        widechar letter = controlLetter & ~('A' ^ 'a');
-        // For compatibility with JSC, inside a character class
-        // we also accept digits and underscore as control characters,
-        // but only in non-unicode mode
-        if ((!unicode_ &&
-             ((controlLetter >= '0' && controlLetter <= '9') ||
-              controlLetter == '_')) ||
-            (letter >= 'A' && letter <= 'Z'))
-        {
-            Advance(2);
-            // Control letters mapped to ASCII control characters in the range
-            // 0x00-0x1f.
-            *code = controlLetter & 0x1f;
-            return true;
-        }
-        if (unicode_) {
-            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
-            return false;
-        }
-        // We match JSC in reading the backslash as a literal
-        // character instead of as starting an escape.
-        *code = '\\';
-        return true;
-      }
-      case '0':
-        if (unicode_) {
-            Advance();
-            if (IsDecimalDigit(current()))
-                return ReportError(JSMSG_INVALID_DECIMAL_ESCAPE);
-            *code = 0;
-            return true;
-        }
-        MOZ_FALLTHROUGH;
-      case '1': case '2': case '3': case '4': case '5': case '6': case '7':
-        if (unicode_) {
-            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
-            return false;
-        }
-        // For compatibility, outside of unicode mode, we interpret a decimal
-        // escape that isn't a back reference (and therefore either \0 or not
-        // valid according to the specification) as a 1..3 digit octal
-        // character code.
-        *code = ParseOctalLiteral();
-        return true;
-      case 'x': {
-        Advance();
-        widechar value;
-        if (ParseHexEscape(2, &value)) {
-            *code = value;
-            return true;
-        }
-        if (unicode_) {
-            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
-            return false;
-        }
-        // If \x is not followed by a two-digit hexadecimal, treat it
-        // as an identity escape in non-unicode mode.
-        *code = 'x';
-        return true;
-      }
-      case 'u': {
-        Advance();
-        widechar value;
-        if (unicode_) {
-            if (current() == '{') {
-                if (!ParseBracedHexEscape(&value))
-                    return false;
-                *code = value;
-                return true;
-            }
-            if (ParseHexEscape(4, &value)) {
-                if (unicode::IsLeadSurrogate(value)) {
-                    widechar trail;
-                    if (ParseTrailSurrogate(&trail)) {
-                        *code = unicode::UTF16Decode(value, trail);
-                        return true;
-                    }
-                }
-                *code = value;
-                return true;
-            }
-            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
-            return false;
-        }
-        if (ParseHexEscape(4, &value)) {
-            *code = value;
-            return true;
-        }
-        // If \u is not followed by a four-digit or braced hexadecimal, treat it
-        // as an identity escape.
-        *code = 'u';
-        return true;
-      }
-      default: {
-        // Extended identity escape (non-unicode only). We accept any character
-        // that hasn't been matched by a more specific case, not just the subset
-        // required by the ECMAScript specification.
-        widechar result = current();
-        if (unicode_ && result != '-' && !IsSyntaxCharacter(result)) {
-            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
-            return false;
-        }
-        Advance();
-        *code = result;
-        return true;
-      }
-    }
-    return true;
+    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
+    ranges->append(CharacterRange::Range(from, to));
+    return alloc->newInfallible<RegExpCharacterClass>(ranges, false);
+} 
+
+static inline RegExpTree*
+NegativeLookahead(LifoAlloc* alloc, char16_t from, char16_t to)
+{
+    return alloc->newInfallible<RegExpLookahead>(RangeAtom(alloc, from, to), false, 0, 0);
 }
 
 class WideCharRange
@@ -1079,100 +462,6 @@ UnicodeRangesAtom(LifoAlloc* alloc,
 }
 
 template <typename CharT>
-RegExpTree*
-RegExpParser<CharT>::ParseCharacterClass()
-{
-    MOZ_ASSERT(current() == '[');
-    Advance();
-    bool is_negated = false;
-    if (current() == '^') {
-        is_negated = true;
-        Advance();
-    }
-    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-    CharacterRangeVector* lead_ranges = nullptr;
-    CharacterRangeVector* trail_ranges = nullptr;
-    WideCharRangeVector* wide_ranges = nullptr;
-
-    if (unicode_) {
-        lead_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-        trail_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
-        wide_ranges = alloc->newInfallible<WideCharRangeVector>(*alloc);
-    }
-
-    while (has_more() && current() != ']') {
-        char16_t char_class = kNoCharClass;
-        widechar first = 0;
-        if (!ParseClassAtom(&char_class, &first))
-            return nullptr;
-        if (current() == '-') {
-            Advance();
-            if (current() == kEndMarker) {
-                // If we reach the end we break out of the loop and let the
-                // following code report an error.
-                break;
-            } else if (current() == ']') {
-                if (unicode_) {
-                    AddCharOrEscapeUnicode(alloc, ranges, lead_ranges, trail_ranges, wide_ranges,
-                                           char_class, first, ignore_case_);
-                } else {
-                    AddCharOrEscape(alloc, ranges, char_class, first);
-                }
-                ranges->append(CharacterRange::Singleton('-'));
-                break;
-            }
-            char16_t char_class_2 = kNoCharClass;
-            widechar next = 0;
-            if (!ParseClassAtom(&char_class_2, &next))
-                return nullptr;
-            if (char_class != kNoCharClass || char_class_2 != kNoCharClass) {
-                if (unicode_)
-                    return ReportError(JSMSG_RANGE_WITH_CLASS_ESCAPE);
-
-                // Either end is an escaped character class. Treat the '-' verbatim.
-                AddCharOrEscape(alloc, ranges, char_class, first);
-                ranges->append(CharacterRange::Singleton('-'));
-                AddCharOrEscape(alloc, ranges, char_class_2, next);
-                continue;
-            }
-            if (first > next)
-                return ReportError(JSMSG_BAD_CLASS_RANGE);
-            if (unicode_)
-                AddUnicodeRange(alloc, ranges, lead_ranges, trail_ranges,wide_ranges, first, next);
-            else
-                ranges->append(CharacterRange::Range(first, next));
-        } else {
-            if (unicode_) {
-                AddCharOrEscapeUnicode(alloc, ranges, lead_ranges, trail_ranges, wide_ranges,
-                                       char_class, first, ignore_case_);
-            } else {
-                AddCharOrEscape(alloc, ranges, char_class, first);
-            }
-        }
-    }
-    if (!has_more())
-        return ReportError(JSMSG_UNTERM_CLASS);
-    Advance();
-    if (!unicode_) {
-        if (ranges->length() == 0) {
-            ranges->append(CharacterRange::Everything());
-            is_negated = !is_negated;
-        }
-        return alloc->newInfallible<RegExpCharacterClass>(ranges, is_negated);
-    }
-
-    if (!is_negated && ranges->length() == 0 && lead_ranges->length() == 0 &&
-        trail_ranges->length() == 0 && wide_ranges->length() == 0)
-    {
-        ranges->append(CharacterRange::Everything());
-        return alloc->newInfallible<RegExpCharacterClass>(ranges, true);
-    }
-
-    return UnicodeRangesAtom(alloc, ranges, lead_ranges, trail_ranges, wide_ranges, is_negated,
-                             ignore_case_);
-}
-
-template <typename CharT>
 bool
 RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, widechar* value)
 {
@@ -1204,167 +493,6 @@ RegExpParser<CharT>::ParseClassAtom(char16_t* char_class, widechar* value)
         *value = first;
         return true;
     }
-}
-
-// In order to know whether an escape is a backreference or not we have to scan
-// the entire regexp and find the number of capturing parentheses.  However we
-// don't want to scan the regexp twice unless it is necessary.  This mini-parser
-// is called when needed.  It can see the difference between capturing and
-// noncapturing parentheses and can skip character classes and backslash-escaped
-// characters.
-template <typename CharT>
-void
-RegExpParser<CharT>::ScanForCaptures()
-{
-    // Start with captures started previous to current position
-    int capture_count = captures_started();
-    // Add count of captures after this position.
-    widechar n;
-    while ((n = current()) != kEndMarker) {
-        Advance();
-        switch (n) {
-          case '\\':
-            Advance();
-            break;
-          case '[': {
-            widechar c;
-            while ((c = current()) != kEndMarker) {
-                Advance();
-                if (c == '\\') {
-                    Advance();
-                } else {
-                    if (c == ']') break;
-                }
-            }
-            break;
-          }
-          case '(':
-            if (current() != '?') capture_count++;
-            break;
-        }
-    }
-    capture_count_ = capture_count;
-    is_scanned_for_captures_ = true;
-}
-
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out)
-{
-    MOZ_ASSERT('\\' == current());
-    MOZ_ASSERT('1' <= Next() && Next() <= '9');
-
-    // Try to parse a decimal literal that is no greater than the total number
-    // of left capturing parentheses in the input.
-    const CharT* start = position();
-    int value = Next() - '0';
-    Advance(2);
-    while (true) {
-        widechar c = current();
-        if (IsDecimalDigit(c)) {
-            value = 10 * value + (c - '0');
-            if (value > kMaxCaptures) {
-                Reset(start);
-                return false;
-            }
-            Advance();
-        } else {
-            break;
-        }
-    }
-    if (value > captures_started()) {
-        if (!is_scanned_for_captures_) {
-            const CharT* saved_position = position();
-            ScanForCaptures();
-            Reset(saved_position);
-        }
-        if (value > capture_count_) {
-            Reset(start);
-            return false;
-        }
-    }
-    *index_out = value;
-    return true;
-}
-
-// QuantifierPrefix ::
-//   { DecimalDigits }
-//   { DecimalDigits , }
-//   { DecimalDigits , DecimalDigits }
-//
-// Returns true if parsing succeeds, and set the min_out and max_out
-// values. Values are truncated to RegExpTree::kInfinity if they overflow.
-template <typename CharT>
-bool
-RegExpParser<CharT>::ParseIntervalQuantifier(int* min_out, int* max_out)
-{
-    MOZ_ASSERT(current() == '{');
-    const CharT* start = position();
-    Advance();
-    int min = 0;
-    if (!IsDecimalDigit(current())) {
-        Reset(start);
-        return false;
-    }
-    while (IsDecimalDigit(current())) {
-        int next = current() - '0';
-        if (min > (RegExpTree::kInfinity - next) / 10) {
-            // Overflow. Skip past remaining decimal digits and return -1.
-            do {
-                Advance();
-            } while (IsDecimalDigit(current()));
-            min = RegExpTree::kInfinity;
-            break;
-        }
-        min = 10 * min + next;
-        Advance();
-    }
-    int max = 0;
-    if (current() == '}') {
-        max = min;
-        Advance();
-    } else if (current() == ',') {
-        Advance();
-        if (current() == '}') {
-            max = RegExpTree::kInfinity;
-            Advance();
-        } else {
-            while (IsDecimalDigit(current())) {
-                int next = current() - '0';
-                if (max > (RegExpTree::kInfinity - next) / 10) {
-                    do {
-                        Advance();
-                    } while (IsDecimalDigit(current()));
-                    max = RegExpTree::kInfinity;
-                    break;
-                }
-                max = 10 * max + next;
-                Advance();
-            }
-            if (current() != '}') {
-                Reset(start);
-                return false;
-            }
-            Advance();
-        }
-    } else {
-        Reset(start);
-        return false;
-    }
-    *min_out = min;
-    *max_out = max;
-    return true;
-}
-
-// Pattern ::
-//   Disjunction
-template <typename CharT>
-RegExpTree*
-RegExpParser<CharT>::ParsePattern()
-{
-    RegExpTree* result = ParseDisjunction();
-    MOZ_ASSERT_IF(result, !has_more());
-    return result;
 }
 
 static inline RegExpTree*
@@ -1478,6 +606,144 @@ UnicodeBackReferenceAtom(LifoAlloc* alloc, RegExpTree* atom)
         RegExpAssertion::NOT_IN_SURROGATE_PAIR));
 
     return builder->ToRegExp();
+}
+
+// ----------------------------------------------------------------------------
+// RegExpParser
+
+template <typename CharT>
+RegExpParser<CharT>::RegExpParser(frontend::TokenStreamAnyChars& ts, LifoAlloc* alloc,
+                                  const CharT* chars, const CharT* end, bool multiline_mode,
+                                  bool unicode, bool ignore_case)
+  : ts(ts),
+    alloc(alloc),
+    captures_(nullptr),
+    start_(chars),
+    next_pos_(start_),
+    end_(end),
+    current_(kEndMarker),
+    capture_count_(0),
+    has_more_(true),
+    multiline_(multiline_mode),
+    unicode_(unicode),
+    ignore_case_(ignore_case),
+    simple_(false),
+    contains_anchor_(false),
+    is_scanned_for_captures_(false)
+{
+    Advance();
+}
+
+template <typename CharT>
+void
+RegExpParser<CharT>::Advance()
+{
+    if (next_pos_ < end_) {
+        current_ = *next_pos_;
+        next_pos_++;
+    } else {
+        current_ = kEndMarker;
+        next_pos_ = end_ + 1;
+        has_more_ = false;
+    }
+}
+
+static bool
+IsSyntaxCharacter(widechar c)
+{
+  switch (c) {
+    case '^':
+    case '$':
+    case '\\':
+    case '.':
+    case '*':
+    case '+':
+    case '?':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case '|':
+    case '/':
+      return true;
+    default:
+      return false;
+  }
+}
+
+template <typename CharT>
+void
+RegExpParser<CharT>::SyntaxError(unsigned errorNumber, ...)
+{
+    ErrorMetadata err;
+
+    ts.fillExcludingContext(&err, ts.currentToken().pos.begin);
+
+    // For most error reporting, the line of context derives from the token
+    // stream.  So when location information doesn't come from the token
+    // stream, we can't give a line of context.  But here the "line of context"
+    // can be (and is) derived from the pattern text, so we can provide it no
+    // matter if the location is derived from the caller.
+    size_t offset = PointerRangeSize(start_, next_pos_ - 1);
+    size_t end = PointerRangeSize(start_, end_);
+
+    const CharT* windowStart = (offset > ErrorMetadata::lineOfContextRadius)
+                               ? start_ + (offset - ErrorMetadata::lineOfContextRadius)
+                               : start_;
+
+    const CharT* windowEnd = (end - offset > ErrorMetadata::lineOfContextRadius)
+                             ? start_ + offset + ErrorMetadata::lineOfContextRadius
+                             : end_;
+
+    size_t windowLength = PointerRangeSize(windowStart, windowEnd);
+    MOZ_ASSERT(windowLength <= ErrorMetadata::lineOfContextRadius * 2);
+
+    // Create the windowed string, not including the potential line
+    // terminator.
+    StringBuffer windowBuf(ts.context());
+    if (!windowBuf.append(windowStart, windowEnd))
+        return;
+
+    // The line of context must be null-terminated, and StringBuffer doesn't
+    // make that happen unless we force it to.
+    if (!windowBuf.append('\0'))
+        return;
+
+    err.lineOfContext.reset(windowBuf.stealChars());
+    if (!err.lineOfContext)
+        return;
+
+    err.lineLength = windowLength;
+    err.tokenOffset = offset - (windowStart - start_);
+
+    va_list args;
+    va_start(args, errorNumber);
+
+    ReportCompileError(ts.context(), Move(err), nullptr, JSREPORT_ERROR, errorNumber, args);
+
+    va_end(args);
+}
+
+template <typename CharT>
+RegExpTree*
+RegExpParser<CharT>::ReportError(unsigned errorNumber, const char* param /* = nullptr */)
+{
+    gc::AutoSuppressGC suppressGC(ts.context());
+    SyntaxError(errorNumber, param);
+    return nullptr;
+}
+
+// Pattern ::
+//   Disjunction
+template <typename CharT>
+RegExpTree*
+RegExpParser<CharT>::ParsePattern()
+{
+    RegExpTree* result = ParseDisjunction();
+    MOZ_ASSERT_IF(result, !has_more());
+    return result;
 }
 
 // Disjunction ::
@@ -1895,6 +1161,743 @@ RegExpParser<CharT>::ParseDisjunction()
         }
         builder->AddQuantifierToAtom(min, max, quantifier_type);
     }
+}
+
+#ifdef DEBUG
+// Currently only used in an assert.kASSERT.
+static bool
+IsSpecialClassEscape(widechar c)
+{
+  switch (c) {
+    case 'd': case 'D':
+    case 's': case 'S':
+    case 'w': case 'W':
+      return true;
+    default:
+      return false;
+  }
+}
+#endif
+
+// In order to know whether an escape is a backreference or not we have to scan
+// the entire regexp and find the number of capturing parentheses.  However we
+// don't want to scan the regexp twice unless it is necessary.  This mini-parser
+// is called when needed.  It can see the difference between capturing and
+// noncapturing parentheses and can skip character classes and backslash-escaped
+// characters.
+template <typename CharT>
+void
+RegExpParser<CharT>::ScanForCaptures()
+{
+    // Start with captures started previous to current position
+    int capture_count = captures_started();
+    // Add count of captures after this position.
+    widechar n;
+    while ((n = current()) != kEndMarker) {
+        Advance();
+        switch (n) {
+          case '\\':
+            Advance();
+            break;
+          case '[': {
+            widechar c;
+            while ((c = current()) != kEndMarker) {
+                Advance();
+                if (c == '\\') {
+                    Advance();
+                } else {
+                    if (c == ']') break;
+                }
+            }
+            break;
+          }
+          case '(':
+            if (current() != '?') capture_count++;
+            break;
+        }
+    }
+    capture_count_ = capture_count;
+    is_scanned_for_captures_ = true;
+}
+
+template <typename CharT>
+bool
+RegExpParser<CharT>::ParseBackReferenceIndex(int* index_out)
+{
+    MOZ_ASSERT('\\' == current());
+    MOZ_ASSERT('1' <= Next() && Next() <= '9');
+
+    // Try to parse a decimal literal that is no greater than the total number
+    // of left capturing parentheses in the input.
+    const CharT* start = position();
+    int value = Next() - '0';
+    Advance(2);
+    while (true) {
+        widechar c = current();
+        if (IsDecimalDigit(c)) {
+            value = 10 * value + (c - '0');
+            if (value > kMaxCaptures) {
+                Reset(start);
+                return false;
+            }
+            Advance();
+        } else {
+            break;
+        }
+    }
+    if (value > captures_started()) {
+        if (!is_scanned_for_captures_) {
+            const CharT* saved_position = position();
+            ScanForCaptures();
+            Reset(saved_position);
+        }
+        if (value > capture_count_) {
+            Reset(start);
+            return false;
+        }
+    }
+    *index_out = value;
+    return true;
+}
+
+// QuantifierPrefix ::
+//   { DecimalDigits }
+//   { DecimalDigits , }
+//   { DecimalDigits , DecimalDigits }
+//
+// Returns true if parsing succeeds, and set the min_out and max_out
+// values. Values are truncated to RegExpTree::kInfinity if they overflow.
+template <typename CharT>
+bool
+RegExpParser<CharT>::ParseIntervalQuantifier(int* min_out, int* max_out)
+{
+    MOZ_ASSERT(current() == '{');
+    const CharT* start = position();
+    Advance();
+    int min = 0;
+    if (!IsDecimalDigit(current())) {
+        Reset(start);
+        return false;
+    }
+    while (IsDecimalDigit(current())) {
+        int next = current() - '0';
+        if (min > (RegExpTree::kInfinity - next) / 10) {
+            // Overflow. Skip past remaining decimal digits and return -1.
+            do {
+                Advance();
+            } while (IsDecimalDigit(current()));
+            min = RegExpTree::kInfinity;
+            break;
+        }
+        min = 10 * min + next;
+        Advance();
+    }
+    int max = 0;
+    if (current() == '}') {
+        max = min;
+        Advance();
+    } else if (current() == ',') {
+        Advance();
+        if (current() == '}') {
+            max = RegExpTree::kInfinity;
+            Advance();
+        } else {
+            while (IsDecimalDigit(current())) {
+                int next = current() - '0';
+                if (max > (RegExpTree::kInfinity - next) / 10) {
+                    do {
+                        Advance();
+                    } while (IsDecimalDigit(current()));
+                    max = RegExpTree::kInfinity;
+                    break;
+                }
+                max = 10 * max + next;
+                Advance();
+            }
+            if (current() != '}') {
+                Reset(start);
+                return false;
+            }
+            Advance();
+        }
+    } else {
+        Reset(start);
+        return false;
+    }
+    *min_out = min;
+    *max_out = max;
+    return true;
+}
+
+template <typename CharT>
+widechar
+RegExpParser<CharT>::ParseOctalLiteral()
+{
+    MOZ_ASSERT('0' <= current() && current() <= '7');
+    // For compatibility with some other browsers (not all), we parse
+    // up to three octal digits with a value below 256.
+    widechar value = current() - '0';
+    Advance();
+    if ('0' <= current() && current() <= '7') {
+        value = value * 8 + current() - '0';
+        Advance();
+        if (value < 32 && '0' <= current() && current() <= '7') {
+            value = value * 8 + current() - '0';
+            Advance();
+        }
+    }
+    return value;
+}
+
+// Returns the value (0 .. 15) of a hexadecimal character c.
+// If c is not a legal hexadecimal character, returns a value < 0.
+inline int
+HexValue(uint32_t c)
+{
+    c -= '0';
+    if (static_cast<unsigned>(c) <= 9) return c;
+    c = (c | 0x20) - ('a' - '0');  // detect 0x11..0x16 and 0x31..0x36.
+    if (static_cast<unsigned>(c) <= 5) return c + 10;
+    return -1;
+}
+
+template <typename CharT>
+bool
+RegExpParser<CharT>::ParseHexEscape(int length, widechar* value)
+{
+    const CharT* start = position();
+    uint32_t val = 0;
+    bool done = false;
+    for (int i = 0; !done; i++) {
+        widechar c = current();
+        int d = HexValue(c);
+        if (d < 0) {
+            Reset(start);
+            return false;
+        }
+        val = val * 16 + d;
+        Advance();
+        if (i == length - 1) {
+            done = true;
+        }
+    }
+    *value = val;
+    return true;
+}
+
+template <typename CharT>
+bool
+RegExpParser<CharT>::ParseClassCharacterEscape(widechar* code)
+{
+    MOZ_ASSERT(current() == '\\');
+    MOZ_ASSERT(has_next() && !IsSpecialClassEscape(Next()));
+    Advance();
+    switch (current()) {
+      case 'b':
+        Advance();
+        *code = '\b';
+        return true;
+      // ControlEscape :: one of
+      //   f n r t v
+      case 'f':
+        Advance();
+        *code = '\f';
+        return true;
+      case 'n':
+        Advance();
+        *code = '\n';
+        return true;
+      case 'r':
+        Advance();
+        *code = '\r';
+        return true;
+      case 't':
+        Advance();
+        *code = '\t';
+        return true;
+      case 'v':
+        Advance();
+        *code = '\v';
+        return true;
+      case 'c': {
+        widechar controlLetter = Next();
+        widechar letter = controlLetter & ~('A' ^ 'a');
+        // For compatibility with JSC, inside a character class
+        // we also accept digits and underscore as control characters,
+        // but only in non-unicode mode
+        if ((!unicode_ &&
+             ((controlLetter >= '0' && controlLetter <= '9') ||
+              controlLetter == '_')) ||
+            (letter >= 'A' && letter <= 'Z'))
+        {
+            Advance(2);
+            // Control letters mapped to ASCII control characters in the range
+            // 0x00-0x1f.
+            *code = controlLetter & 0x1f;
+            return true;
+        }
+        if (unicode_) {
+            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+            return false;
+        }
+        // We match JSC in reading the backslash as a literal
+        // character instead of as starting an escape.
+        *code = '\\';
+        return true;
+      }
+      case '0':
+        if (unicode_) {
+            Advance();
+            if (IsDecimalDigit(current()))
+                return ReportError(JSMSG_INVALID_DECIMAL_ESCAPE);
+            *code = 0;
+            return true;
+        }
+        MOZ_FALLTHROUGH;
+      case '1': case '2': case '3': case '4': case '5': case '6': case '7':
+        if (unicode_) {
+            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+            return false;
+        }
+        // For compatibility, outside of unicode mode, we interpret a decimal
+        // escape that isn't a back reference (and therefore either \0 or not
+        // valid according to the specification) as a 1..3 digit octal
+        // character code.
+        *code = ParseOctalLiteral();
+        return true;
+      case 'x': {
+        Advance();
+        widechar value;
+        if (ParseHexEscape(2, &value)) {
+            *code = value;
+            return true;
+        }
+        if (unicode_) {
+            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+            return false;
+        }
+        // If \x is not followed by a two-digit hexadecimal, treat it
+        // as an identity escape in non-unicode mode.
+        *code = 'x';
+        return true;
+      }
+      case 'u': {
+        Advance();
+        widechar value;
+        if (unicode_) {
+            if (current() == '{') {
+                if (!ParseBracedHexEscape(&value))
+                    return false;
+                *code = value;
+                return true;
+            }
+            if (ParseHexEscape(4, &value)) {
+                if (unicode::IsLeadSurrogate(value)) {
+                    widechar trail;
+                    if (ParseTrailSurrogate(&trail)) {
+                        *code = unicode::UTF16Decode(value, trail);
+                        return true;
+                    }
+                }
+                *code = value;
+                return true;
+            }
+            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+            return false;
+        }
+        if (ParseHexEscape(4, &value)) {
+            *code = value;
+            return true;
+        }
+        // If \u is not followed by a four-digit or braced hexadecimal, treat it
+        // as an identity escape.
+        *code = 'u';
+        return true;
+      }
+      default: {
+        // Extended identity escape (non-unicode only). We accept any character
+        // that hasn't been matched by a more specific case, not just the subset
+        // required by the ECMAScript specification.
+        widechar result = current();
+        if (unicode_ && result != '-' && !IsSyntaxCharacter(result)) {
+            ReportError(JSMSG_INVALID_IDENTITY_ESCAPE);
+            return false;
+        }
+        Advance();
+        *code = result;
+        return true;
+      }
+    }
+    return true;
+}
+
+template <typename CharT>
+RegExpTree*
+RegExpParser<CharT>::ParseCharacterClass()
+{
+    MOZ_ASSERT(current() == '[');
+    Advance();
+    bool is_negated = false;
+    if (current() == '^') {
+        is_negated = true;
+        Advance();
+    }
+    CharacterRangeVector* ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
+    CharacterRangeVector* lead_ranges = nullptr;
+    CharacterRangeVector* trail_ranges = nullptr;
+    WideCharRangeVector* wide_ranges = nullptr;
+
+    if (unicode_) {
+        lead_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
+        trail_ranges = alloc->newInfallible<CharacterRangeVector>(*alloc);
+        wide_ranges = alloc->newInfallible<WideCharRangeVector>(*alloc);
+    }
+
+    while (has_more() && current() != ']') {
+        char16_t char_class = kNoCharClass;
+        widechar first = 0;
+        if (!ParseClassAtom(&char_class, &first))
+            return nullptr;
+        if (current() == '-') {
+            Advance();
+            if (current() == kEndMarker) {
+                // If we reach the end we break out of the loop and let the
+                // following code report an error.
+                break;
+            } else if (current() == ']') {
+                if (unicode_) {
+                    AddCharOrEscapeUnicode(alloc, ranges, lead_ranges, trail_ranges, wide_ranges,
+                                           char_class, first, ignore_case_);
+                } else {
+                    AddCharOrEscape(alloc, ranges, char_class, first);
+                }
+                ranges->append(CharacterRange::Singleton('-'));
+                break;
+            }
+            char16_t char_class_2 = kNoCharClass;
+            widechar next = 0;
+            if (!ParseClassAtom(&char_class_2, &next))
+                return nullptr;
+            if (char_class != kNoCharClass || char_class_2 != kNoCharClass) {
+                if (unicode_)
+                    return ReportError(JSMSG_RANGE_WITH_CLASS_ESCAPE);
+
+                // Either end is an escaped character class. Treat the '-' verbatim.
+                AddCharOrEscape(alloc, ranges, char_class, first);
+                ranges->append(CharacterRange::Singleton('-'));
+                AddCharOrEscape(alloc, ranges, char_class_2, next);
+                continue;
+            }
+            if (first > next)
+                return ReportError(JSMSG_BAD_CLASS_RANGE);
+            if (unicode_)
+                AddUnicodeRange(alloc, ranges, lead_ranges, trail_ranges,wide_ranges, first, next);
+            else
+                ranges->append(CharacterRange::Range(first, next));
+        } else {
+            if (unicode_) {
+                AddCharOrEscapeUnicode(alloc, ranges, lead_ranges, trail_ranges, wide_ranges,
+                                       char_class, first, ignore_case_);
+            } else {
+                AddCharOrEscape(alloc, ranges, char_class, first);
+            }
+        }
+    }
+    if (!has_more())
+        return ReportError(JSMSG_UNTERM_CLASS);
+    Advance();
+    if (!unicode_) {
+        if (ranges->length() == 0) {
+            ranges->append(CharacterRange::Everything());
+            is_negated = !is_negated;
+        }
+        return alloc->newInfallible<RegExpCharacterClass>(ranges, is_negated);
+    }
+
+    if (!is_negated && ranges->length() == 0 && lead_ranges->length() == 0 &&
+        trail_ranges->length() == 0 && wide_ranges->length() == 0)
+    {
+        ranges->append(CharacterRange::Everything());
+        return alloc->newInfallible<RegExpCharacterClass>(ranges, true);
+    }
+
+    return UnicodeRangesAtom(alloc, ranges, lead_ranges, trail_ranges, wide_ranges, is_negated,
+                             ignore_case_);
+}
+
+template <typename CharT>
+bool
+RegExpParser<CharT>::ParseBracedHexEscape(widechar* value)
+{
+    MOZ_ASSERT(current() == '{');
+    Advance();
+
+    bool first = true;
+    uint32_t code = 0;
+    while (true) {
+        widechar c = current();
+        if (c == kEndMarker) {
+            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+            return false;
+        }
+        if (c == '}') {
+            if (first) {
+                ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+                return false;
+            }
+            Advance();
+            break;
+        }
+
+        int d = HexValue(c);
+        if (d < 0) {
+            ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
+            return false;
+        }
+        code = (code << 4) | d;
+        if (code > unicode::NonBMPMax) {
+            ReportError(JSMSG_UNICODE_OVERFLOW, "regular expression");
+            return false;
+        }
+        Advance();
+        first = false;
+    }
+
+    *value = code;
+    return true;
+}
+
+template <typename CharT>
+bool
+RegExpParser<CharT>::ParseTrailSurrogate(widechar* value)
+{
+    if (current() != '\\')
+        return false;
+
+    const CharT* start = position();
+    Advance();
+    if (current() != 'u') {
+        Reset(start);
+        return false;
+    }
+    Advance();
+    if (!ParseHexEscape(4, value)) {
+        Reset(start);
+        return false;
+    }
+    if (!unicode::IsTrailSurrogate(*value)) {
+        Reset(start);
+        return false;
+    }
+    return true;
+}
+
+template <typename CharT>
+bool
+RegExpParser<CharT>::ParseRawSurrogatePair(char16_t* lead, char16_t* trail)
+{
+    widechar c1 = current();
+    if (!unicode::IsLeadSurrogate(c1))
+        return false;
+
+    const CharT* start = position();
+    Advance();
+    widechar c2 = current();
+    if (!unicode::IsTrailSurrogate(c2)) {
+        Reset(start);
+        return false;
+    }
+    Advance();
+    *lead = c1;
+    *trail = c2;
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// RegExpBuilder
+
+RegExpBuilder::RegExpBuilder(LifoAlloc* alloc)
+  : alloc(alloc),
+    pending_empty_(false),
+    characters_(nullptr)
+#ifdef DEBUG
+  , last_added_(ADD_NONE)
+#endif
+{}
+
+void
+RegExpBuilder::FlushCharacters()
+{
+    pending_empty_ = false;
+    if (characters_ != nullptr) {
+        RegExpTree* atom = alloc->newInfallible<RegExpAtom>(characters_);
+        characters_ = nullptr;
+        text_.Add(alloc, atom);
+#ifdef DEBUG
+        last_added_ = ADD_ATOM;
+#endif
+    }
+}
+
+void
+RegExpBuilder::FlushText()
+{
+    FlushCharacters();
+    int num_text = text_.length();
+    if (num_text == 0)
+        return;
+    if (num_text == 1) {
+        terms_.Add(alloc, text_.last());
+    } else {
+        RegExpText* text = alloc->newInfallible<RegExpText>(alloc);
+        for (int i = 0; i < num_text; i++)
+            text_.Get(i)->AppendToText(text);
+        terms_.Add(alloc, text);
+    }
+    text_.Clear();
+}
+
+void
+RegExpBuilder::AddCharacter(char16_t c)
+{
+    pending_empty_ = false;
+    if (characters_ == nullptr)
+        characters_ = alloc->newInfallible<CharacterVector>(*alloc);
+    characters_->append(c);
+#ifdef DEBUG
+    last_added_ = ADD_CHAR;
+#endif
+}
+
+void
+RegExpBuilder::AddEmpty()
+{
+    pending_empty_ = true;
+}
+
+void
+RegExpBuilder::AddAtom(RegExpTree* term)
+{
+    if (term->IsEmpty()) {
+        AddEmpty();
+        return;
+    }
+    if (term->IsTextElement()) {
+        FlushCharacters();
+        text_.Add(alloc, term);
+    } else {
+        FlushText();
+        terms_.Add(alloc, term);
+    }
+#ifdef DEBUG
+    last_added_ = ADD_ATOM;
+#endif
+}
+
+void
+RegExpBuilder::AddAssertion(RegExpTree* assert)
+{
+    FlushText();
+    if (terms_.length() > 0 && terms_.last()->IsAssertion()) {
+        // Omit repeated assertions of the same type.
+        RegExpAssertion* last = terms_.last()->AsAssertion();
+        RegExpAssertion* next = assert->AsAssertion();
+        if (last->assertion_type() == next->assertion_type()) return;
+    }
+    terms_.Add(alloc, assert);
+#ifdef DEBUG
+    last_added_ = ADD_ASSERT;
+#endif
+}
+
+void
+RegExpBuilder::NewAlternative()
+{
+    FlushTerms();
+}
+
+void
+RegExpBuilder::FlushTerms()
+{
+    FlushText();
+    int num_terms = terms_.length();
+    RegExpTree* alternative;
+    if (num_terms == 0)
+        alternative = RegExpEmpty::GetInstance();
+    else if (num_terms == 1)
+        alternative = terms_.last();
+    else
+        alternative = alloc->newInfallible<RegExpAlternative>(terms_.GetList(alloc));
+    alternatives_.Add(alloc, alternative);
+    terms_.Clear();
+#ifdef DEBUG
+    last_added_ = ADD_NONE;
+#endif
+}
+
+RegExpTree*
+RegExpBuilder::ToRegExp()
+{
+    FlushTerms();
+    int num_alternatives = alternatives_.length();
+    if (num_alternatives == 0) {
+        return RegExpEmpty::GetInstance();
+    }
+    if (num_alternatives == 1) {
+        return alternatives_.last();
+    }
+    return alloc->newInfallible<RegExpDisjunction>(alternatives_.GetList(alloc));
+}
+
+void
+RegExpBuilder::AddQuantifierToAtom(int min, int max,
+                                   RegExpQuantifier::QuantifierType quantifier_type)
+{
+    if (pending_empty_) {
+        pending_empty_ = false;
+        return;
+    }
+    RegExpTree* atom;
+    if (characters_ != nullptr) {
+        MOZ_ASSERT(last_added_ == ADD_CHAR);
+        // Last atom was character.
+        CharacterVector* char_vector = characters_;
+        int num_chars = char_vector->length();
+        if (num_chars > 1) {
+            CharacterVector* prefix = alloc->newInfallible<CharacterVector>(*alloc);
+            prefix->append(char_vector->begin(), num_chars - 1);
+            text_.Add(alloc, alloc->newInfallible<RegExpAtom>(prefix));
+            char_vector = alloc->newInfallible<CharacterVector>(*alloc);
+            char_vector->append((*characters_)[num_chars - 1]);
+        }
+        characters_ = nullptr;
+        atom = alloc->newInfallible<RegExpAtom>(char_vector);
+        FlushText();
+    } else if (text_.length() > 0) {
+        MOZ_ASSERT(last_added_ == ADD_ATOM);
+        atom = text_.RemoveLast();
+        FlushText();
+    } else if (terms_.length() > 0) {
+        MOZ_ASSERT(last_added_ == ADD_ATOM);
+        atom = terms_.RemoveLast();
+        if (atom->max_match() == 0) {
+            // Guaranteed to only match an empty string.
+#ifdef DEBUG
+            last_added_ = ADD_TERM;
+#endif
+            if (min == 0)
+                return;
+            terms_.Add(alloc, atom);
+            return;
+        }
+    } else {
+        // Only call immediately after adding an atom or character!
+        MOZ_CRASH("Bad call");
+    }
+    terms_.Add(alloc, alloc->newInfallible<RegExpQuantifier>(min, max, quantifier_type, atom));
+#ifdef DEBUG
+    last_added_ = ADD_TERM;
+#endif
 }
 
 template class irregexp::RegExpParser<Latin1Char>;
