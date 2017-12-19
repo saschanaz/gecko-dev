@@ -36,75 +36,107 @@
 namespace js {
 namespace irregexp {
 
-class MOZ_STACK_CLASS InterpretedRegExpMacroAssembler final : public RegExpMacroAssembler
-{
+// A light-weight assembler for the Irregexp byte code.
+class MOZ_STACK_CLASS InterpretedRegExpMacroAssembler final : public RegExpMacroAssembler {
+  using Label = jit::Label;
+
   public:
+    // Create an assembler. Instructions and relocation information are emitted
+    // into a buffer, with the instructions starting from the beginning and the
+    // relocation information starting from the end of the buffer. See CodeDesc
+    // for a detailed comment on the layout (globals.h).
+    //
+    // If the provided buffer is NULL, the assembler allocates and grows its own
+    // buffer, and buffer_size determines the initial buffer size. The buffer is
+    // owned by the assembler and deallocated upon destruction of the assembler.
+    //
+    // If the provided buffer is not NULL, the assembler uses the provided buffer
+    // for code generation and assumes its size to be buffer_size. If the buffer
+    // is too small, a fatal error occurs. No deallocation of the buffer is done
+    // upon destruction of the assembler.
     InterpretedRegExpMacroAssembler(JSContext* cx, LifoAlloc* alloc, size_t numSavedRegisters);
     ~InterpretedRegExpMacroAssembler();
 
-    // Inherited virtual methods.
-    RegExpCode GenerateCode(JSContext* cx, bool match_only);
-    void AdvanceCurrentPosition(int by);
-    void AdvanceRegister(int reg, int by);
-    void Backtrack();
-    void Bind(jit::Label* label);
-    void CheckAtStart(jit::Label* on_at_start);
-    void CheckCharacter(unsigned c, jit::Label* on_equal);
-    void CheckCharacterAfterAnd(unsigned c, unsigned and_with, jit::Label* on_equal);
-    void CheckCharacterGT(char16_t limit, jit::Label* on_greater);
-    void CheckCharacterLT(char16_t limit, jit::Label* on_less);
-    void CheckGreedyLoop(jit::Label* on_tos_equals_current_position);
-    void CheckNotAtStart(jit::Label* on_not_at_start);
-    void CheckNotBackReference(int start_reg, jit::Label* on_no_match);
-    void CheckNotBackReferenceIgnoreCase(int start_reg, jit::Label* on_no_match, bool unicode);
-    void CheckNotCharacter(unsigned c, jit::Label* on_not_equal);
-    void CheckNotCharacterAfterAnd(unsigned c, unsigned and_with, jit::Label* on_not_equal);
-    void CheckNotCharacterAfterMinusAnd(char16_t c, char16_t minus, char16_t and_with,
-                                        jit::Label* on_not_equal);
-    void CheckCharacterInRange(char16_t from, char16_t to,
-                               jit::Label* on_in_range);
-    void CheckCharacterNotInRange(char16_t from, char16_t to,
-                                  jit::Label* on_not_in_range);
-    void CheckBitInTable(RegExpShared::JitCodeTable table, jit::Label* on_bit_set);
-    void JumpOrBacktrack(jit::Label* to);
-    void Fail();
-    void IfRegisterGE(int reg, int comparand, jit::Label* if_ge);
-    void IfRegisterLT(int reg, int comparand, jit::Label* if_lt);
-    void IfRegisterEqPos(int reg, jit::Label* if_eq);
-    void LoadCurrentCharacter(int cp_offset, jit::Label* on_end_of_input,
-                              bool check_bounds = true, int characters = 1);
-    void PopCurrentPosition();
-    void PopRegister(int register_index);
-    void PushCurrentPosition();
-    void PushRegister(int register_index, StackCheckFlag check_stack_limit);
-    void ReadCurrentPositionFromRegister(int reg);
-    void ReadBacktrackStackPointerFromRegister(int reg);
-    void SetCurrentPositionFromEnd(int by);
-    void SetRegister(int register_index, int to);
-    bool Succeed();
-    void WriteCurrentPositionToRegister(int reg, int cp_offset);
-    void ClearRegisters(int reg_from, int reg_to);
-    void WriteBacktrackStackPointerToRegister(int reg);
-    void PushBacktrack(jit::Label* label);
-    void BindBacktrack(jit::Label* label);
-
     // The byte-code interpreter checks on each push anyway.
-    int stack_limit_slack() { return 1; }
+    virtual int stack_limit_slack() { return 1; }
+    virtual bool CanReadUnaligned() { return false; }
+    virtual void Bind(Label* label);
+    virtual void AdvanceCurrentPosition(int by);  // Signed cp change.
+    virtual void PopCurrentPosition();
+    virtual void PushCurrentPosition();
+    virtual void Backtrack();
+    virtual void JumpOrBacktrack(Label* label);
+    virtual void PushBacktrack(Label* label);
+    virtual bool Succeed();
+    virtual void Fail();
+    virtual void PopRegister(int register_index);
+    virtual void PushRegister(int register_index,
+                              StackCheckFlag check_stack_limit);
+    virtual void AdvanceRegister(int reg, int by);  // r[reg] += by.
+    virtual void SetCurrentPositionFromEnd(int by);
+    virtual void SetRegister(int register_index, int to);
+    virtual void WriteCurrentPositionToRegister(int reg, int cp_offset);
+    virtual void ClearRegisters(int reg_from, int reg_to);
+    virtual void ReadCurrentPositionFromRegister(int reg);
+    virtual void WriteBacktrackStackPointerToRegister(int reg);
+    virtual void ReadBacktrackStackPointerFromRegister(int reg);
+    virtual void LoadCurrentCharacter(int cp_offset,
+                                      Label* on_end_of_input,
+                                      bool check_bounds = true,
+                                      int characters = 1);
+    virtual void CheckCharacter(unsigned c, Label* on_equal);
+    virtual void CheckCharacterAfterAnd(unsigned c,
+                                        unsigned mask,
+                                        Label* on_equal);
+    virtual void CheckCharacterGT(uc16 limit, Label* on_greater);
+    virtual void CheckCharacterLT(uc16 limit, Label* on_less);
+    virtual void CheckGreedyLoop(Label* on_tos_equals_current_position);
+    virtual void CheckAtStart(Label* on_at_start);
+    virtual void CheckNotAtStart(Label* on_not_at_start);
+    virtual void CheckNotCharacter(unsigned c, Label* on_not_equal);
+    virtual void CheckNotCharacterAfterAnd(unsigned c,
+                                           unsigned mask,
+                                           Label* on_not_equal);
+    virtual void CheckNotCharacterAfterMinusAnd(uc16 c,
+                                                uc16 minus,
+                                                uc16 mask,
+                                                Label* on_not_equal);
+    virtual void CheckCharacterInRange(uc16 from,
+                                       uc16 to,
+                                       Label* on_in_range);
+    virtual void CheckCharacterNotInRange(uc16 from,
+                                          uc16 to,
+                                          Label* on_not_in_range);
+    virtual void CheckBitInTable(RegExpShared::JitCodeTable table, Label* on_bit_set);
+    virtual void CheckNotBackReference(int start_reg,
+                                       Label* on_no_match);
+    virtual void CheckNotBackReferenceIgnoreCase(int start_reg,
+                                                 Label* on_no_match, bool unicode);
+    virtual void IfRegisterLT(int register_index, int comparand, Label* if_lt);
+    virtual void IfRegisterGE(int register_index, int comparand, Label* if_ge);
+    virtual void IfRegisterEqPos(int register_index, Label* if_eq);
+
+    virtual RegExpCode GenerateCode(JSContext* cx, bool match_only);
+    virtual void BindBacktrack(Label* label);
 
   private:
     void Expand();
 
     // Code and bitmap emission.
-    void EmitOrLink(jit::Label* label);
-    void Emit32(uint32_t x);
-    void Emit16(uint32_t x);
-    void Emit8(uint32_t x);
-    void Emit(uint32_t bc, uint32_t arg);
+    inline void EmitOrLink(Label* label);
+    inline void Emit32(uint32_t x);
+    inline void Emit16(uint32_t x);
+    inline void Emit8(uint32_t x);
+    inline void Emit(uint32_t bc, uint32_t arg);
+    // Bytecode buffer.
+    int length() { return length_; }
 
-    jit::Label backtrack_;
-
+    // The buffer into which code and relocation info are generated.
+    uint8_t* buffer_;
+    int length_;
     // The program counter.
     int pc_;
+    Label backtrack_;
 
     int advance_current_start_;
     int advance_current_offset_;
@@ -112,8 +144,7 @@ class MOZ_STACK_CLASS InterpretedRegExpMacroAssembler final : public RegExpMacro
 
     static const int kInvalidPC = -1;
 
-    uint8_t* buffer_;
-    int length_;
+    DISALLOW_IMPLICIT_CONSTRUCTORS(InterpretedRegExpMacroAssembler);
 };
 
 } }  // namespace js::irregexp
