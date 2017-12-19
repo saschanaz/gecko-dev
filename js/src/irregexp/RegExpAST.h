@@ -34,7 +34,6 @@
 #include "mozilla/EnumSet.h"
 #include "ds/LifoAlloc.h"
 #include "irregexp/RegExpTypes.h"
-#include "vm/Unicode.h"
 
 // Prevent msvc build failures as indicated in bug 1205328
 #ifdef min
@@ -130,12 +129,12 @@ class CharacterRange {
     }
     static inline CharacterRange Range(uc32 from, uc32 to) {
         // TODO(anba): Enable/Fix assertions.
-        // DCHECK(0 <= from && to <= unicode::NonBMPMax);
+        // DCHECK(0 <= from && to <= String::kMaxCodePoint);
         DCHECK(static_cast<uint32_t>(from) <= static_cast<uint32_t>(to));
         return CharacterRange(from, to);
     }
     static inline CharacterRange Everything() {
-        return CharacterRange(0, unicode::NonBMPMax);
+        return CharacterRange(0, String::kMaxCodePoint);
     }
     static inline CharacterRangeVector* List(LifoAlloc* alloc,
                                              CharacterRange range) {
@@ -251,7 +250,7 @@ typedef InfallibleVector<TextElement, 1> TextElementVector;
 
 class RegExpTree {
   public:
-    static const int kInfinity = INT32_MAX;
+    static const int kInfinity = kMaxInt;
     virtual ~RegExpTree() {}
     virtual void* Accept(RegExpVisitor* visitor, void* data) = 0;
     virtual RegExpNode* ToNode(RegExpCompiler* compiler,

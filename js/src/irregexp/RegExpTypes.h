@@ -51,8 +51,17 @@ namespace irregexp {
 #define DCHECK_NOT_NULL(expr) MOZ_ASSERT((expr) != nullptr)
 
 // TODO(anba): Decide on types.
-using uc16 = char16_t;
-using uc32 = char16_t;
+using uc16 = char16_t; // upstream: uint16_t
+using uc32 = char16_t; // upstream: int32_t
+
+constexpr int32_t kMinInt = INT32_MIN;
+constexpr int32_t kMaxInt = INT32_MAX;
+
+namespace String {
+    constexpr int32_t kMaxOneByteCharCode = 0xff;
+    constexpr int32_t kMaxUtf16CodeUnit = 0xffff;
+    constexpr int32_t kMaxCodePoint = 0x10ffff;
+}
 
 // InfallibleVector is like Vector, but all its methods are infallible (they
 // crash on OOM). We use this class instead of Vector to avoid a ton of

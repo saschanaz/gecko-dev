@@ -268,7 +268,7 @@ class RegExpNode {
                                       int characters_filled_in,
                                       bool not_at_start) = 0;
 
-    static const int kNodeIsTooComplexForGreedyLoops = -1;
+    static const int kNodeIsTooComplexForGreedyLoops = kMinInt;
 
     virtual int GreedyLoopTextLength() { return kNodeIsTooComplexForGreedyLoops; }
 

@@ -48,22 +48,14 @@ using mozilla::Maybe;
 
 using jit::Label;
 
-static const int kMaxOneByteCharCode = 0xff;
-static const int kMaxUtf16CodeUnit = 0xffff;
 static const int kRangeEndMarker = 0x10000;
-
-static char16_t
-MaximumCharacter(bool latin1)
-{
-    return latin1 ? kMaxOneByteCharCode : kMaxUtf16CodeUnit;
-}
 
 ContainedInLattice irregexp::AddRange(ContainedInLattice containment,
                                       const int* ranges,
                                       int ranges_length,
                                       Interval new_range) {
     DCHECK((ranges_length & 1) == 1);
-    DCHECK(ranges[ranges_length - 1] == kMaxUtf16CodeUnit + 1);
+    DCHECK(ranges[ranges_length - 1] == String::kMaxUtf16CodeUnit + 1);
     if (containment == kLatticeUnknown) return containment;
     bool inside = false;
     int last = 0;
@@ -892,7 +884,7 @@ GetCaseIndependentLetters(char16_t character,
         char16_t c = choices[i];
 
         // Skip characters that can't appear in one byte strings.
-        if (!unicode && one_byte_subject && c > kMaxOneByteCharCode)
+        if (!unicode && one_byte_subject && c > String::kMaxOneByteCharCode)
             continue;
 
         // Watch for duplicates.
@@ -1030,7 +1022,12 @@ EmitAtomSingle(RegExpCompiler* compiler,
 static bool ShortCutEmitCharacterPair(RegExpMacroAssembler* macro_assembler,
                                       bool one_byte, uc16 c1, uc16 c2,
                                       Label* on_failure) {
-    uc16 char_mask = MaximumCharacter(one_byte);
+    uc16 char_mask;
+    if (one_byte) {
+        char_mask = String::kMaxOneByteCharCode;
+    } else {
+        char_mask = String::kMaxUtf16CodeUnit;
+    }
 
     MOZ_ASSERT(c1 != c2);
     if (c1 > c2) {
@@ -1281,7 +1278,7 @@ static void SplitSearchSpace(RangeBoundaryVector* ranges,
     // range with a single not-taken branch, speeding up this important
     // character range (even non-Latin1 charset-based text has spaces and
     // punctuation).
-    if (*border - 1 > kMaxOneByteCharCode &&  // Latin1 case.
+    if (*border - 1 > String::kMaxOneByteCharCode &&  // Latin1 case.
         end_index - start_index > (*new_start_index - start_index) * 2 &&
         last - first > kSize * 2 && binary_chop_index > *new_start_index &&
         ranges->at(binary_chop_index) >= first + 2 * kSize) {
@@ -1320,8 +1317,8 @@ static void GenerateBranches(RegExpMacroAssembler* masm, RangeBoundaryVector* ra
                              int start_index, int end_index, uc32 min_char,
                              uc32 max_char, Label* fall_through,
                              Label* even_label, Label* odd_label) {
-    DCHECK_LE(min_char, kMaxUtf16CodeUnit);
-    DCHECK_LE(max_char, kMaxUtf16CodeUnit);
+    DCHECK_LE(min_char, String::kMaxUtf16CodeUnit);
+    DCHECK_LE(max_char, String::kMaxUtf16CodeUnit);
 
     int first = ranges->at(start_index);
     int last = ranges->at(end_index) - 1;
@@ -1475,7 +1472,12 @@ static void EmitCharClass(LifoAlloc* alloc,
         CharacterRange::Canonicalize(ranges);
     }
 
-    int max_char = MaximumCharacter(one_byte);
+    int max_char;
+    if (one_byte) {
+        max_char = String::kMaxOneByteCharCode;
+    } else {
+        max_char = String::kMaxUtf16CodeUnit;
+    }
     int range_count = ranges->length();
 
     int last_valid_range = range_count - 1;
@@ -1753,14 +1755,19 @@ static inline uint32_t SmearBitsRight(uint32_t v) {
 
 bool QuickCheckDetails::Rationalize(bool asc) {
     bool found_useful_op = false;
-    uint32_t char_mask = MaximumCharacter(asc);
+    uint32_t char_mask;
+    if (asc) {
+        char_mask = String::kMaxOneByteCharCode;
+    } else {
+        char_mask = String::kMaxUtf16CodeUnit;
+    }
 
     mask_ = 0;
     value_ = 0;
     int char_shift = 0;
     for (int i = 0; i < characters_; i++) {
         Position* pos = &positions_[i];
-        if ((pos->mask & kMaxOneByteCharCode) != 0) {
+        if ((pos->mask & String::kMaxOneByteCharCode) != 0) {
             found_useful_op = true;
         }
         mask_ |= (pos->mask & char_mask) << char_shift;
@@ -1800,7 +1807,12 @@ bool RegExpNode::EmitQuickCheck(RegExpCompiler* compiler,
     if (details->characters() == 1) {
         // If number of characters preloaded is 1 then we used a byte or 16 bit
         // load so the value is already masked down.
-        uint32_t char_mask = MaximumCharacter(compiler->one_byte());
+        uint32_t char_mask;
+        if (compiler->one_byte()) {
+            char_mask = String::kMaxOneByteCharCode;
+        } else {
+            char_mask = String::kMaxUtf16CodeUnit;
+        }
         if ((mask & char_mask) == char_mask) need_mask = false;
         mask &= char_mask;
     } else {
@@ -1846,7 +1858,12 @@ void TextNode::GetQuickCheckDetails(QuickCheckDetails* details,
                                     bool not_at_start) {
     DCHECK(characters_filled_in < details->characters());
     int characters = details->characters();
-    int char_mask = MaximumCharacter(compiler->one_byte());
+    int char_mask;
+    if (compiler->one_byte()) {
+        char_mask = String::kMaxOneByteCharCode;
+    } else {
+        char_mask = String::kMaxUtf16CodeUnit;
+    }
 
     for (size_t k = 0; k < elements()->length(); k++) {
         TextElement elm = elements()->at(k);
@@ -2091,7 +2108,7 @@ RegExpNode* TextNode::FilterOneByte(int depth, bool ignore_case, bool unicode) {
             CharacterVector& quarks = const_cast<CharacterVector&>(elm.atom()->data());
             for (size_t j = 0; j < quarks.length(); j++) {
                 uint16_t c = quarks[j];
-                if (c <= kMaxOneByteCharCode) continue;
+                if (c <= String::kMaxOneByteCharCode) continue;
                 if (!ignore_case) return set_replacement(nullptr);
                 // Here, we need to check for characters whose upper and lower cases
                 // are outside the Latin-1 range.
@@ -2114,14 +2131,14 @@ RegExpNode* TextNode::FilterOneByte(int depth, bool ignore_case, bool unicode) {
             if (cc->is_negated()) {
                 if (range_count != 0 &&
                     ranges->at(0).from() == 0 &&
-                    ranges->at(0).to() >= kMaxOneByteCharCode) {
+                    ranges->at(0).to() >= String::kMaxOneByteCharCode) {
                     // This will be handled in a later filter.
                     if (ignore_case && RangesContainLatin1Equivalents(ranges, unicode)) continue;
                     return set_replacement(nullptr);
                 }
             } else {
                 if (range_count == 0 ||
-                    ranges->at(0).from() > kMaxOneByteCharCode) {
+                    ranges->at(0).from() > String::kMaxOneByteCharCode) {
                     // This will be handled in a later filter.
                     if (ignore_case && RangesContainLatin1Equivalents(ranges, unicode)) continue;
                     return set_replacement(nullptr);
@@ -2557,7 +2574,7 @@ static void UpdateBoundsCheck(int index, int* checked_up_to) {
 static inline bool
 IsLatin1Equivalent(char16_t c, RegExpCompiler* compiler)
 {
-    if (c <= kMaxOneByteCharCode)
+    if (c <= String::kMaxOneByteCharCode)
         return true;
 
     if (!compiler->ignore_case())
@@ -2565,7 +2582,7 @@ IsLatin1Equivalent(char16_t c, RegExpCompiler* compiler)
 
     char16_t converted = ConvertNonLatin1ToLatin1(c, compiler->unicode());
 
-    return converted != 0 && converted <= kMaxOneByteCharCode;
+    return converted != 0 && converted <= String::kMaxOneByteCharCode;
 }
 
 // We call this repeatedly to generate code for each pass over the text node.
@@ -2806,7 +2823,12 @@ RegExpNode* TextNode::GetSuccessorOfOmnivorousTextNode(
         return ranges->length() == 0 ? on_success() : nullptr;
     }
     if (ranges->length() != 1) return nullptr;
-    uint32_t max_char = MaximumCharacter(compiler->one_byte());
+    uint32_t max_char;
+    if (compiler->one_byte()) {
+        max_char = String::kMaxOneByteCharCode;
+    } else {
+        max_char = String::kMaxUtf16CodeUnit;
+    }
     return ranges->at(0).IsEverything(max_char) ? on_success() : nullptr;
 }
 
@@ -2984,8 +3006,11 @@ BoyerMooreLookahead::BoyerMooreLookahead(
       compiler_(compiler),
       bitmaps_(*alloc) {
     bool unicode_ignore_case = compiler->unicode() && compiler->ignore_case();
-    max_char_ = MaximumCharacter(compiler->one_byte());
-
+    if (compiler->one_byte()) {
+        max_char_ = String::kMaxOneByteCharCode;
+    } else {
+        max_char_ = String::kMaxUtf16CodeUnit;
+    }
     bitmaps_.reserve(length);
     for (size_t i = 0; i < length; i++) {
         bitmaps_.append(alloc->newInfallible<BoyerMoorePositionInfo>(alloc, unicode_ignore_case));
@@ -3688,7 +3713,7 @@ static bool CompareInverseRanges(const CharacterRangeVector* ranges,
             return false;
         }
     }
-    if (range.to() != 0xffff) {
+    if (range.to() != String::kMaxUtf16CodeUnit) {
         return false;
     }
     return true;
@@ -4134,7 +4159,7 @@ void js::irregexp::AddClassNegated(const int* elmv,
     elmc--;
     DCHECK(elmv[elmc] == kRangeEndMarker);
     DCHECK(elmv[0] != 0x0000);
-    DCHECK(elmv[elmc - 1] != kMaxUtf16CodeUnit);
+    DCHECK(elmv[elmc - 1] != String::kMaxUtf16CodeUnit);
     uc16 last = 0x0000;
     for (int i = 0; i < elmc; i += 2) {
         DCHECK(last <= elmv[i] - 1);
@@ -4142,7 +4167,7 @@ void js::irregexp::AddClassNegated(const int* elmv,
         ranges->append(CharacterRange(last, elmv[i] - 1));
         last = elmv[i + 1];
     }
-    ranges->append(CharacterRange(last, kMaxUtf16CodeUnit));
+    ranges->append(CharacterRange(last, String::kMaxUtf16CodeUnit));
 }
 
 void CharacterRange::AddClassEscape(LifoAlloc* alloc,
@@ -4230,10 +4255,10 @@ CharacterRange::AddCaseEquivalents(bool is_one_byte, bool unicode, CharacterRang
     char16_t top = to();
 
     if (is_one_byte && !RangeContainsLatin1Equivalents(*this, unicode)) {
-        if (bottom > kMaxOneByteCharCode)
+        if (bottom > String::kMaxOneByteCharCode)
             return;
-        if (top > kMaxOneByteCharCode)
-            top = kMaxOneByteCharCode;
+        if (top > String::kMaxOneByteCharCode)
+            top = String::kMaxOneByteCharCode;
     } else {
         // Nothing to do for surrogates.
         if (bottom >= unicode::LeadSurrogateMin && top <= unicode::TrailSurrogateMax)
@@ -4581,7 +4606,7 @@ bool TextNode::FillInBMInfo(int initial_offset, int budget,
                 if (bm->compiler()->ignore_case()) {
                     char16_t chars[kEcma262UnCanonicalizeMaxWidth];
                     int length = GetCaseIndependentLetters(
-                        character, bm->max_char() == kMaxOneByteCharCode,
+                        character, bm->max_char() == String::kMaxOneByteCharCode,
                         bm->compiler()->unicode(), chars);
                     for (int j = 0; j < length; j++) {
                         bm->Set(offset, chars[j]);
