@@ -146,12 +146,12 @@ static bool BackRefMatchesNoCase(int from, int current,
 }
 
 static int32_t Load32Aligned(const byte* pc) {
-    DCHECK((reinterpret_cast<intptr_t>(pc) & 3) == 0);
+    DCHECK_EQ(0, reinterpret_cast<intptr_t>(pc) & 3);
     return *reinterpret_cast<const int32_t*>(pc);
 }
 
 static int32_t Load16Aligned(const byte* pc) {
-    DCHECK((reinterpret_cast<intptr_t>(pc) & 1) == 0);
+    DCHECK_EQ(0, reinterpret_cast<intptr_t>(pc) & 1);
     return *reinterpret_cast<const uint16_t*>(pc);
 }
 

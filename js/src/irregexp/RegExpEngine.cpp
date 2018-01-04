@@ -58,7 +58,7 @@ ContainedInLattice irregexp::AddRange(ContainedInLattice containment,
                                       const int* ranges,
                                       int ranges_length,
                                       Interval new_range) {
-    DCHECK_EQ(1, (ranges_length & 1));
+    DCHECK_EQ(1, ranges_length & 1);
     DCHECK_EQ(String::kMaxCodePoint + 1, ranges[ranges_length - 1]);
     if (containment == kLatticeUnknown) return containment;
     bool inside = false;

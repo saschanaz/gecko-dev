@@ -223,7 +223,7 @@ class RegExpParser {
     bool ParseHexEscape(int length, uc32* value);
     bool ParseUnicodeEscape(uc32* value, bool* parsed);
     bool ParseUnlimitedLengthHexNumber(int max_value, uc32* value);
-    RegExpTree* ParseCharacterClass();
+    RegExpTree* ParseCharacterClass(const RegExpBuilder* state);
 
     uc32 ParseOctalLiteral();
 
@@ -278,6 +278,7 @@ class RegExpParser {
 
     class RegExpParserState {
       public:
+        // Push a state on the stack.
         RegExpParserState(RegExpParserState* previous_state,
                           SubexpressionType group_type,
                           RegExpLookaround::Type lookaround_type,

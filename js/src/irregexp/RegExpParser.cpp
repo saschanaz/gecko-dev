@@ -349,8 +349,8 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
           case '$': {
             Advance();
             RegExpAssertion::AssertionType assertion_type =
-                builder->multiline()() ? RegExpAssertion::END_OF_LINE
-                                       : RegExpAssertion::END_OF_INPUT;
+                builder->multiline() ? RegExpAssertion::END_OF_LINE
+                                     : RegExpAssertion::END_OF_INPUT;
             builder->AddAssertion(
                 zone_->newInfallible<RegExpAssertion>(assertion_type, builder->flags()));
             continue;
@@ -363,46 +363,15 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
             // Everything except \x0A, \x0D, \u2028 and \u2029
             CharacterRange::AddClassEscape('.', ranges, false, zone());
 
-            RegExpCharacterClass* cc = zone_->newInfallible<RegExpCharacterClass>(ranges);
+            RegExpCharacterClass* cc =
+                zone_->newInfallible<RegExpCharacterClass>(ranges, builder->flags());
             builder->AddCharacterClass(cc);
             break;
           }
           case '(': {
-            SubexpressionType subexpr_type = CAPTURE;
-            RegExpLookaround::Type lookaround_type = state->lookaround_type();
-            Advance();
-            if (current() == '?') {
-                switch (Next()) {
-                  case ':':
-                    subexpr_type = GROUPING;
-                    Advance(2);
-                    break;
-                  case '=':
-                    lookaround_type = RegExpLookaround::LOOKAHEAD;
-                    subexpr_type = POSITIVE_LOOKAROUND;
-                    Advance(2);
-                    break;
-                  case '!':
-                    lookaround_type = RegExpLookaround::LOOKAHEAD;
-                    subexpr_type = NEGATIVE_LOOKAROUND;
-                    Advance(2);
-                    break;
-                  default:
-                    return ReportError(JSMSG_INVALID_GROUP);
-                }
-            }
-
-            if (subexpr_type == CAPTURE) {
-                if (captures_started_ >= kMaxCaptures) {
-                    return ReportError(JSMSG_TOO_MANY_PARENS);
-                }
-                captures_started_++;
-            }
-
-            // Store current state and begin new disjunction parsing.
-            state = zone_->newInfallible<RegExpParserState>(
-                state, subexpr_type, lookaround_type, captures_started_,
-                ignore_case(), unicode(), zone());
+            state = ParseOpenParenthesis(state);
+            if (!state)
+                return nullptr;
             builder = state->builder();
             continue;
           }
@@ -656,6 +625,47 @@ RegExpTree* RegExpParser<CharT>::ParseDisjunction() {
     }
 }
 
+template <typename CharT>
+RegExpParser<CharT>::RegExpParserState* RegExpParser<CharT>::ParseOpenParenthesis(
+        RegExpParserState* state) {
+    RegExpLookaround::Type lookaround_type = state->lookaround_type();
+    SubexpressionType subexpr_type = CAPTURE;
+    Advance();
+    if (current() == '?') {
+        switch (Next()) {
+          case ':':
+            Advance(2);
+            subexpr_type = GROUPING;
+            break;
+          case '=':
+            Advance(2);
+            lookaround_type = RegExpLookaround::LOOKAHEAD;
+            subexpr_type = POSITIVE_LOOKAROUND;
+            break;
+          case '!':
+            Advance(2);
+            lookaround_type = RegExpLookaround::LOOKAHEAD;
+            subexpr_type = NEGATIVE_LOOKAROUND;
+            break;
+          default:
+            ReportError(JSMSG_INVALID_GROUP);
+            return nullptr;
+        }
+    }
+    if (subexpr_type == CAPTURE) {
+        if (captures_started_ >= kMaxCaptures) {
+            ReportError(JSMSG_TOO_MANY_PARENS);
+            return nullptr;
+        }
+        captures_started_++;
+    }
+    JSRegExp::Flags flags = state->builder()->flags();
+    // Store current state and begin new disjunction parsing.
+    return zone_->newInfallible<RegExpParserState>(
+        state, subexpr_type, lookaround_type, captures_started_,
+        flags, zone());
+}
+
 #ifdef DEBUG
 // Currently only used in an DCHECK.
 static bool IsSpecialClassEscape(uc32 c) {
@@ -759,7 +769,7 @@ RegExpCapture* RegExpParser<CharT>::GetCapture(int index) {
     int know_captures =
         is_scanned_for_captures_ ? capture_count_ : captures_started_;
     DCHECK(index <= know_captures);
-    if (captures_ == NULL) {
+    if (captures_ == nullptr) {
         captures_ = zone_->newInfallible<RegExpCaptureVector>(*zone());
         captures_->reserve(know_captures);
     }
@@ -771,7 +781,7 @@ RegExpCapture* RegExpParser<CharT>::GetCapture(int index) {
 
 template <typename CharT>
 bool RegExpParser<CharT>::RegExpParserState::IsInsideCaptureGroup(int index) {
-    for (RegExpParserState* s = this; s != NULL; s = s->previous_state()) {
+    for (RegExpParserState* s = this; s != nullptr; s = s->previous_state()) {
         if (s->group_type() != CAPTURE) continue;
         // Return true if we found the matching capture index.
         if (index == s->capture_index()) return true;
@@ -893,7 +903,7 @@ bool RegExpParser<CharT>::ParseUnicodeEscape(uc32* value, bool* parsed) {
     // arbitrary. \ and u have already been read.
     if (current() == '{' && unicode()) {
         Advance();
-        if (ParseUnlimitedLengthHexNumber(0x10ffff, value)) {
+        if (ParseUnlimitedLengthHexNumber(0x10FFFF, value)) {
             if (current() == '}') {
                 Advance();
                 *parsed = true;
@@ -902,7 +912,8 @@ bool RegExpParser<CharT>::ParseUnicodeEscape(uc32* value, bool* parsed) {
             ReportError(JSMSG_INVALID_UNICODE_ESCAPE);
             return false;
         }
-        // Error already reported in ParseUnlimitedLengthHexNumber.
+        // We've already reported an error in ParseUnlimitedLengthHexNumber,
+        // so we don't need to call |Reset(...)| here.
         return false;
     }
     // \u but no {, or \u{...} escapes not allowed.
@@ -951,7 +962,7 @@ bool RegExpParser<CharT>::ParseUnlimitedLengthHexNumber(int max_value, uc32* val
 
 template <typename CharT>
 bool RegExpParser<CharT>::ParseClassCharacterEscape(uc32* code) {
-    DCHECK(current() == '\\');
+    DCHECK_EQ('\\', current());
     DCHECK(has_next() && !IsSpecialClassEscape(Next()));
     Advance();
     switch (current()) {
@@ -990,8 +1001,8 @@ bool RegExpParser<CharT>::ParseClassCharacterEscape(uc32* code) {
         if (letter >= 'A' && letter <= 'Z') {
             Advance(2);
             // Control letters mapped to ASCII control characters in the range
-            // 0x00-0x1f.
-            *code = controlLetter & 0x1f;
+            // 0x00-0x1F.
+            *code = controlLetter & 0x1F;
             return true;
         }
         if (unicode()) {
@@ -1002,7 +1013,7 @@ bool RegExpParser<CharT>::ParseClassCharacterEscape(uc32* code) {
         if ((controlLetter >= '0' && controlLetter <= '9') ||
             controlLetter == '_') {
             Advance(2);
-            *code = controlLetter & 0x1f;
+            *code = controlLetter & 0x1F;
             return true;
         }
         // We match JSC in reading the backslash as a literal
@@ -1130,7 +1141,7 @@ bool RegExpParser<CharT>::ParseClassEscape(CharacterRangeVector* ranges,
 }
 
 template <typename CharT>
-RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
+RegExpTree* RegExpParser<CharT>::ParseCharacterClass(const RegExpBuilder* builder) {
     DCHECK_EQ(current(), '[');
     Advance();
     bool is_negated = false;
@@ -1138,8 +1149,9 @@ RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
         is_negated = true;
         Advance();
     }
-    CharacterRangeVector* ranges = zone_->newInfallible<CharacterRangeVector>(*zone());
-    bool add_unicode_case_equivalents = unicode() && ignore_case();
+    CharacterRangeVector* ranges =
+        zone_->newInfallible<CharacterRangeVector>(*zone());
+    bool add_unicode_case_equivalents = unicode() && builder->ignore_case();
     while (has_more() && current() != ']') {
         uc32 char_1 = 0, char_2 = 0;
         bool is_class_1, is_class_2;
@@ -1186,14 +1198,10 @@ RegExpTree* RegExpParser<CharT>::ParseCharacterClass() {
         return ReportError(JSMSG_UNTERM_CLASS);
     }
     Advance();
-    if (ranges->length() == 0) {
-        ranges->append(CharacterRange::Everything());
-        is_negated = !is_negated;
-    }
     RegExpCharacterClass::CharacterClassFlags character_class_flags;
     if (is_negated) character_class_flags = RegExpCharacterClass::NEGATED;
-    return zone_->newInfallible<RegExpCharacterClass>(
-        ranges, builder->flags(), character_class_flags);
+    return zone_->newInfallible<RegExpCharacterClass>(ranges, builder->flags(),
+                                                      character_class_flags);
 }
 
 // ----------------------------------------------------------------------------
@@ -1336,7 +1344,8 @@ void RegExpBuilder::AddCharacterClass(RegExpCharacterClass* cc) {
 
 void RegExpBuilder::AddCharacterClassForDesugaring(uc32 c) {
     AddTerm(zone_->newInfallible<RegExpCharacterClass>(
-        CharacterRange::List(zone(), CharacterRange::Singleton(c)), flags_));
+        CharacterRange::List(zone(), CharacterRange::Singleton(c)),
+        flags_));
 }
 
 void RegExpBuilder::AddAtom(RegExpTree* term) {
