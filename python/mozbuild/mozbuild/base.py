@@ -768,7 +768,7 @@ class MozbuildObject(ProcessExecutionMixin):
                 if self._is_windows():
                     cmd.append('HOST_OS_ARCH=WINNT')
                 try:
-                    subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+                    subprocess.check_output(cmd, stderr=subprocess.STDOUT, universal_newlines=True)
                 except subprocess.CalledProcessError as e:
                     return False, is_xcode_lisense_error(e.output)
                 return True, False

@@ -388,7 +388,7 @@ class ImportHook(object):
 
     def __call__(self, name, globals=None, locals=None, fromlist=None,
                  level=-1):
-        if level < 0 and sys.version_info == 3:
+        if level < 0 and sys.version_info[0] == 3:
             level = 0
         # name might be a relative import. Instead of figuring out what that
         # resolves to, which is complex, just rely on the real import.
