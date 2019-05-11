@@ -14,7 +14,10 @@ from mach.decorators import (
     CommandProvider,
 )
 
-import which
+try:
+    from shutil import which
+except ImportError:
+    from which import which
 from mozbuild.base import MachCommandBase
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -54,8 +57,9 @@ class Documentation(MachCommandBase):
     def build_docs(self, path=None, fmt='html', outdir=None, auto_open=True,
                    serve=True, http=None, archive=False, upload=False):
         try:
-            which.which('jsdoc')
-        except which.WhichError:
+            if which('jsdoc') is None:
+                raise Exception()
+        except:
             return die('jsdoc not found - please install from npm.')
 
         self.activate_pipenv(os.path.join(here, 'Pipfile'))

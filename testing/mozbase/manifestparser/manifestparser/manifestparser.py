@@ -4,7 +4,10 @@
 
 from __future__ import absolute_import, print_function
 
-from StringIO import StringIO
+try:
+    from io import StringIO
+except:
+    from StringIO import StringIO
 import json
 import fnmatch
 import os
@@ -23,7 +26,10 @@ from .filters import (
 __all__ = ['ManifestParser', 'TestManifest', 'convert']
 
 relpath = os.path.relpath
-string = (basestring,)
+if sys.version_info[0] == 2:
+    string = (basestring,)
+else:
+    string = (str,)
 
 
 # path normalization

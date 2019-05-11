@@ -896,7 +896,7 @@ class ConfigureSandbox(dict):
         # Special case for the open() builtin, because otherwise, using it
         # fails with "IOError: file() constructor not accessible in
         # restricted mode"
-        if what == '__builtin__.open':
+        if what == '__builtin__.open' or what == 'builtins.open':
             return lambda *args, **kwargs: open(*args, **kwargs)
         # Special case os and os.environ so that os.environ is our copy of
         # the environment.

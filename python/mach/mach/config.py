@@ -24,7 +24,6 @@ from functools import wraps
 from six.moves.configparser import RawConfigParser, NoSectionError
 from six import string_types as str_type
 
-
 class ConfigException(Exception):
     pass
 
@@ -337,7 +336,7 @@ class ConfigSettings(collections.Mapping):
             extra -- A dict of additional key/value pairs to add to the
                 setting metadata.
         """
-        if isinstance(type_cls, basestring):
+        if isinstance(type_cls, str_type):
             type_cls = TYPE_CLASSES[type_cls]
 
         meta = {

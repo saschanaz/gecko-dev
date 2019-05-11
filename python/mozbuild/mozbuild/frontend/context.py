@@ -312,7 +312,7 @@ class BaseCompileFlags(ContextDerivedValue, dict):
         # a template were set and which were provided as defaults.
         template_name = getattr(context, 'template', None)
         if template_name in (None, 'Gyp'):
-            dict.__init__(self, ((k, v if v is None else TypedList(unicode)(v))
+            dict.__init__(self, ((k, v if v is None else TypedList(type(u''))(v))
                                  for k, v, _ in self.flag_variables))
         else:
             dict.__init__(self)
@@ -513,7 +513,7 @@ class CompileFlags(BaseCompileFlags):
         dict.__setitem__(self, key, value)
 
 
-class FinalTargetValue(ContextDerivedValue, unicode):
+class FinalTargetValue(ContextDerivedValue, type(u'')):
     def __new__(cls, context, value=""):
         if not value:
             value = 'dist/'
@@ -523,7 +523,7 @@ class FinalTargetValue(ContextDerivedValue, unicode):
                 value += 'bin'
             if context['DIST_SUBDIR']:
                 value += '/' + context['DIST_SUBDIR']
-        return unicode.__new__(cls, value)
+        return type(u'').__new__(cls, value)
 
 
 def Enum(*values):
@@ -571,8 +571,7 @@ class PathMeta(type):
                 cls = SourcePath
         return super(PathMeta, cls).__call__(context, value)
 
-
-class Path(ContextDerivedValue, unicode):
+class Path(ContextDerivedValue, type(u'')):
     """Stores and resolves a source path relative to a given context
 
     This class is used as a backing type for some of the sandbox variables.
@@ -603,7 +602,7 @@ class Path(ContextDerivedValue, unicode):
     def __cmp__(self, other):
         if isinstance(other, Path) and self.srcdir != other.srcdir:
             return cmp(self.full_path, other.full_path)
-        return cmp(unicode(self), other)
+        return cmp(type(u'')(self), other)
 
     # __cmp__ is not enough because unicode has __eq__, __ne__, etc. defined
     # and __cmp__ is only used for those when they don't exist.
@@ -911,18 +910,18 @@ ReftestManifestList = OrderedPathListWithAction(read_reftest_manifest)
 OrderedSourceList = ContextDerivedTypedList(SourcePath, StrictOrderingOnAppendList)
 OrderedTestFlavorList = TypedList(Enum(*all_test_flavors()),
                                   StrictOrderingOnAppendList)
-OrderedStringList = TypedList(unicode, StrictOrderingOnAppendList)
+OrderedStringList = TypedList(type(u''), StrictOrderingOnAppendList)
 DependentTestsEntry = ContextDerivedTypedRecord(('files', OrderedSourceList),
                                                 ('tags', OrderedStringList),
                                                 ('flavors', OrderedTestFlavorList))
 BugzillaComponent = TypedNamedTuple('BugzillaComponent',
-                                    [('product', unicode), ('component', unicode)])
+                                    [('product', type(u'')), ('component', type(u''))])
 SchedulingComponents = ContextDerivedTypedRecord(
-        ('inclusive', TypedList(unicode, StrictOrderingOnAppendList)),
-        ('exclusive', TypedList(unicode, StrictOrderingOnAppendList)))
+        ('inclusive', TypedList(type(u''), StrictOrderingOnAppendList)),
+        ('exclusive', TypedList(type(u''), StrictOrderingOnAppendList)))
 
 GeneratedFilesList = StrictOrderingOnAppendListWithFlagsFactory({
-    'script': unicode,
+    'script': type(u''),
     'inputs': list,
     'force': bool,
     'flags': list, })
@@ -1244,8 +1243,8 @@ VARIABLES = {
         ),
 
     'RUST_LIBRARY_TARGET_DIR': (
-        unicode,
-        unicode,
+        type(u''),
+        type(u''),
         """Where CARGO_TARGET_DIR should point when compiling this library.  If
         not set, it defaults to the current objdir.  It should be a relative path
         to the current objdir; absolute paths should not be used.
@@ -1266,13 +1265,13 @@ VARIABLES = {
         ),
 
     'RUST_TESTS': (
-        TypedList(unicode),
+        TypedList(type(u'')),
         list,
         """Names of Rust tests to build and run via `cargo test`.
         """),
 
     'RUST_TEST_FEATURES': (
-        TypedList(unicode),
+        TypedList(type(u'')),
         list,
         """Cargo features to activate for RUST_TESTS.
         """
@@ -1529,7 +1528,7 @@ VARIABLES = {
                         """Like ``OBJDIR_FILES``, with preprocessing. Use sparingly.
         """),
 
-    'FINAL_LIBRARY': (unicode, unicode,
+    'FINAL_LIBRARY': (type(u''), type(u''),
                       """Library in which the objects of the current directory will be linked.
 
         This variable contains the name of a library, defined elsewhere with
@@ -1570,7 +1569,7 @@ VARIABLES = {
         with the host compiler.
         """),
 
-    'HOST_LIBRARY_NAME': (unicode, unicode,
+    'HOST_LIBRARY_NAME': (type(u''), type(u''),
                           """Name of target library generated when cross compiling.
         """),
 
@@ -1581,7 +1580,7 @@ VARIABLES = {
         libraries that link into this library via FINAL_LIBRARY.
         """),
 
-    'LIBRARY_NAME': (unicode, unicode,
+    'LIBRARY_NAME': (type(u''), type(u''),
                      """The code name of the library generated for a directory.
 
         By default STATIC_LIBRARY_NAME and SHARED_LIBRARY_NAME take this name.
@@ -1593,20 +1592,20 @@ VARIABLES = {
         ``example/components/xpcomsample.lib`` on Windows.
         """),
 
-    'SHARED_LIBRARY_NAME': (unicode, unicode,
+    'SHARED_LIBRARY_NAME': (type(u''), type(u''),
                             """The name of the static library generated for a directory, if it needs to
         differ from the library code name.
 
         Implies FORCE_SHARED_LIB.
         """),
 
-    'SHARED_LIBRARY_OUTPUT_CATEGORY': (unicode, unicode,
+    'SHARED_LIBRARY_OUTPUT_CATEGORY': (type(u''), type(u''),
                                        """The output category for this context's shared library. If set this will
         correspond to the build command that will build this shared library, and
         the library will not be built as part of the default build.
         """),
 
-    'RUST_LIBRARY_OUTPUT_CATEGORY': (unicode, unicode,
+    'RUST_LIBRARY_OUTPUT_CATEGORY': (type(u''), type(u''),
                                      """The output category for this context's rust library. If set this will
         correspond to the build command that will build this rust library, and
         the library will not be built as part of the default build.
@@ -1619,7 +1618,7 @@ VARIABLES = {
         Implies FORCE_SHARED_LIB.
         """),
 
-    'STATIC_LIBRARY_NAME': (unicode, unicode,
+    'STATIC_LIBRARY_NAME': (type(u''), type(u''),
                             """The name of the static library generated for a directory, if it needs to
         differ from the library code name.
 
@@ -1651,31 +1650,31 @@ VARIABLES = {
 
         This variable contains a list of system libaries to link against.
         """),
-    'RCFILE': (unicode, unicode,
+    'RCFILE': (type(u''), type(u''),
                """The program .rc file.
 
         This variable can only be used on Windows.
         """),
 
-    'RESFILE': (unicode, unicode,
+    'RESFILE': (type(u''), type(u''),
                 """The program .res file.
 
         This variable can only be used on Windows.
         """),
 
-    'RCINCLUDE': (unicode, unicode,
+    'RCINCLUDE': (type(u''), type(u''),
                   """The resource script file to be included in the default .res file.
 
         This variable can only be used on Windows.
         """),
 
-    'DEFFILE': (Path, unicode,
+    'DEFFILE': (Path, type(u''),
                 """The program .def (module definition) file.
 
         This variable can only be used on Windows.
         """),
 
-    'SYMBOLS_FILE': (Path, unicode,
+    'SYMBOLS_FILE': (Path, type(u''),
                      """A file containing a list of symbols to export from a shared library.
 
         The given file contains a list of symbols to be exported, and is
@@ -1696,7 +1695,7 @@ VARIABLES = {
         ``BIN_SUFFIX``, the name will remain unchanged.
         """),
 
-    'SONAME': (unicode, unicode,
+    'SONAME': (type(u''), type(u''),
                """The soname of the shared object currently being linked
 
         soname is the "logical name" of a shared object, often used to provide
@@ -1778,7 +1777,7 @@ VARIABLES = {
         ``GENERATED_FILES``.
         """),
 
-    'PROGRAM': (unicode, unicode,
+    'PROGRAM': (type(u''), type(u''),
                 """Compiled executable name.
 
         If the configuration token ``BIN_SUFFIX`` is set, its value will be
@@ -1786,7 +1785,7 @@ VARIABLES = {
         ``BIN_SUFFIX``, ``PROGRAM`` will remain unchanged.
         """),
 
-    'HOST_PROGRAM': (unicode, unicode,
+    'HOST_PROGRAM': (type(u''), type(u''),
                      """Compiled host executable name.
 
         If the configuration token ``HOST_BIN_SUFFIX`` is set, its value will be
@@ -1824,7 +1823,7 @@ VARIABLES = {
         files.
         """),
 
-    'XPIDL_MODULE': (unicode, unicode,
+    'XPIDL_MODULE': (type(u''), type(u''),
                      """XPCOM Interface Definition Module Name.
 
         This is the name of the ``.xpt`` file that is created by linking
@@ -1985,14 +1984,14 @@ VARIABLES = {
         """),
 
     # The following variables are used to control the target of installed files.
-    'XPI_NAME': (unicode, unicode,
+    'XPI_NAME': (type(u''), type(u''),
                  """The name of an extension XPI to generate.
 
         When this variable is present, the results of this directory will end up
         being packaged into an extension instead of the main dist/bin results.
         """),
 
-    'DIST_SUBDIR': (unicode, unicode,
+    'DIST_SUBDIR': (type(u''), type(u''),
                     """The name of an alternate directory to install files to.
 
         When this variable is present, the results of this directory will end up
@@ -2000,7 +1999,7 @@ VARIABLES = {
         otherwise be placed.
         """),
 
-    'FINAL_TARGET': (FinalTargetValue, unicode,
+    'FINAL_TARGET': (FinalTargetValue, type(u''),
                      """The name of the directory to install targets to.
 
         The directory is relative to the top of the object directory. The
@@ -2020,7 +2019,7 @@ VARIABLES = {
 
     'GYP_DIRS': (StrictOrderingOnAppendListWithFlagsFactory({
             'variables': dict,
-            'input': unicode,
+            'input': type(u''),
             'sandbox_vars': dict,
             'no_chromium': bool,
             'no_unified': bool,
@@ -2065,7 +2064,7 @@ VARIABLES = {
             'sandbox_vars': dict,
             'non_unified_sources': StrictOrderingOnAppendList,
             'mozilla_flags': list,
-            'gn_target': unicode,
+            'gn_target': type(u''),
         }), list,
         """List of dirs containing gn files describing targets to build. Attributes:
             - variables, a dictionary containing variables and values to pass

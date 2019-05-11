@@ -7,7 +7,10 @@ from __future__ import absolute_import, print_function, unicode_literals
 import argparse
 import os
 import subprocess
-import which
+try:
+    from shutil import which
+except ImportError:
+    from which import which
 
 from mozbuild.base import (
     MachCommandBase,
@@ -34,8 +37,9 @@ class MachCommands(MachCommandBase):
 
         if ide == 'eclipse':
             try:
-                which.which('eclipse')
-            except which.WhichError:
+                if which('eclipse') is None:
+                    raise Exception()
+            except:
                 print('Eclipse CDT 8.4 or later must be installed in your PATH.')
                 print('Download: http://www.eclipse.org/cdt/downloads.php')
                 return 1

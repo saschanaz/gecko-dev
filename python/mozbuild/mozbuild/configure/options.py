@@ -9,7 +9,6 @@ import six
 import sys
 from collections import OrderedDict
 
-
 def istupleofstrings(obj):
     return isinstance(obj, tuple) and len(obj) and all(
         isinstance(o, six.string_types) for o in obj)

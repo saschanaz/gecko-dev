@@ -10,7 +10,10 @@ import re
 import subprocess
 import sys
 import urllib
-import urlparse
+try:
+    from urllib.parse import urljoin
+except ImportError:
+    from urlparse import urljoin
 
 import mozinfo
 
@@ -131,7 +134,7 @@ class MozharnessRunner(MozbuildObject):
 
 
     def path_to_url(self, path):
-        return urlparse.urljoin('file:', urllib.pathname2url(path))
+        return urljoin('file:', urllib.pathname2url(path))
 
     def _installer_url(self):
         package_re = {

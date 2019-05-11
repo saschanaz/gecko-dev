@@ -37,6 +37,8 @@ from .dispatcher import CommandAction
 from .logging import LoggingManager
 from .registrar import Registrar
 
+from six import string_types
+
 SUGGEST_MACH_BUSTED = r'''
 You can invoke |./mach busted| to check if this issue is already on file. If it
 isn't, please use |./mach busted file| to report it. If |./mach busted| is
@@ -257,10 +259,10 @@ To see more help for a specific command, run:
             # Ensure parent module is present otherwise we'll (likely) get
             # an error due to unknown parent.
             if b'mach.commands' not in sys.modules:
-                mod = imp.new_module(b'mach.commands')
-                sys.modules[b'mach.commands'] = mod
+                mod = imp.new_module('mach.commands')
+                sys.modules['mach.commands'] = mod
 
-            module_name = 'mach.commands.%s' % uuid.uuid4().get_hex()
+            module_name = 'mach.commands.%s' % uuid.uuid4().hex
 
         try:
             imp.load_source(module_name, path)
@@ -353,7 +355,7 @@ To see more help for a specific command, run:
             # is a TTY. This provides a mechanism to allow said processes to
             # enable emitting code codes, for example.
             if os.isatty(orig_stdout.fileno()):
-                os.environ[b'MACH_STDOUT_ISATTY'] = b'1'
+                os.environ['MACH_STDOUT_ISATTY'] = '1'
 
             return self._run(argv)
         except KeyboardInterrupt:
@@ -604,7 +606,7 @@ To see more help for a specific command, run:
 
             machrc, .machrc
         """
-        if isinstance(paths, basestring):
+        if isinstance(paths, string_types):
             paths = [paths]
 
         valid_names = ('machrc', '.machrc')

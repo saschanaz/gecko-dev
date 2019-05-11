@@ -173,10 +173,10 @@ def bootstrap(topsrcdir, mozilla_dir=None):
     # Ensure we are running Python 2.7+. We put this check here so we generate a
     # user-friendly error message rather than a cryptic stack trace on module
     # import.
-    if sys.version_info[0] != 2 or sys.version_info[1] < 7:
-        print('Python 2.7 or above (but not Python 3) is required to run mach.')
-        print('You are running Python', platform.python_version())
-        sys.exit(1)
+    # if sys.version_info[0] != 2 or sys.version_info[1] < 7:
+    #     print('Python 2.7 or above (but not Python 3) is required to run mach.')
+    #     print('You are running Python', platform.python_version())
+    #     sys.exit(1)
 
     # Global build system and mach state is stored in a central directory. By
     # default, this is ~/.mozbuild. However, it can be defined via an
@@ -343,7 +343,7 @@ def bootstrap(topsrcdir, mozilla_dir=None):
     # Note which process is top-level so that recursive mach invocations can avoid writing
     # telemetry data.
     if 'MACH_MAIN_PID' not in os.environ:
-        os.environ[b'MACH_MAIN_PID'] = str(os.getpid()).encode('ascii')
+        os.environ['MACH_MAIN_PID'] = str(os.getpid())
 
     driver = mach.main.Mach(os.getcwd())
     driver.populate_context_handler = populate_context
@@ -388,6 +388,8 @@ class ImportHook(object):
 
     def __call__(self, name, globals=None, locals=None, fromlist=None,
                  level=-1):
+        if level < 0 and sys.version_info == 3:
+            level = 0
         # name might be a relative import. Instead of figuring out what that
         # resolves to, which is complex, just rely on the real import.
         # Since we don't know the full module name, we can't check sys.modules,
