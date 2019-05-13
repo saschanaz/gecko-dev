@@ -1307,6 +1307,24 @@ def encode(obj, encoding='utf-8'):
     return obj
 
 
+def to_str(obj, encoding):
+    '''Recursively convert any strings to the native string type'''
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, bytes):  # Python 3
+        return obj.decode(encoding)
+    if isinstance(obj, six.text_type):  # Python 2
+        return obj.encode(encoding)
+    if isinstance(obj, dict):
+        return {
+            to_str(k, encoding): to_str(v, encoding)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, Iterable):
+        return [to_str(i, encoding) for i in obj]
+    return obj
+
+
 def patch_main():
     '''This is a hack to work around the fact that Windows multiprocessing needs
     to import the original main module, and assumes that it corresponds to a file

@@ -8,6 +8,7 @@ import codecs
 import itertools
 import logging
 import os
+import six
 import sys
 import textwrap
 
@@ -23,7 +24,7 @@ from mozbuild.pythonutil import iter_modules_in_path
 from mozbuild.backend.configenvironment import PartialConfigEnvironment
 from mozbuild.util import (
     indented_repr,
-    encode,
+    to_str,
 )
 import mozpack.path as mozpath
 
@@ -58,12 +59,12 @@ def config_status(config):
 
     sanitized_config = {}
     sanitized_config['substs'] = {
-        k: sanitized_bools(v) for k, v in config.iteritems()
+        k: sanitized_bools(v) for k, v in six.iteritems(config)
         if k not in ('DEFINES', 'non_global_defines', 'TOPSRCDIR', 'TOPOBJDIR',
                      'CONFIG_STATUS_DEPS')
     }
     sanitized_config['defines'] = {
-        k: sanitized_bools(v) for k, v in config['DEFINES'].iteritems()
+        k: sanitized_bools(v) for k, v in six.iteritems(config['DEFINES'])
     }
     sanitized_config['non_global_defines'] = config['non_global_defines']
     sanitized_config['topsrcdir'] = config['TOPSRCDIR']
@@ -80,13 +81,13 @@ def config_status(config):
             #!%(python)s
             # coding=%(encoding)s
             from __future__ import unicode_literals
-            from mozbuild.util import encode
+            from mozbuild.util import to_str
             encoding = '%(encoding)s'
         ''') % {'python': config['PYTHON'], 'encoding': encoding})
         # A lot of the build backend code is currently expecting byte
         # strings and breaks in subtle ways with unicode strings. (bug 1296508)
-        for k, v in sanitized_config.iteritems():
-            fh.write('%s = encode(%s, encoding)\n' % (k, indented_repr(v)))
+        for k, v in six.iteritems(sanitized_config):
+            fh.write('%s = to_str(%s, encoding)\n' % (k, indented_repr(v)))
         fh.write("__all__ = ['topobjdir', 'topsrcdir', 'defines', "
                  "'non_global_defines', 'substs', 'mozconfig']")
 
@@ -125,7 +126,7 @@ def config_status(config):
 
         # A lot of the build backend code is currently expecting byte strings
         # and breaks in subtle ways with unicode strings.
-        return config_status(args=[], **encode(sanitized_config, encoding))
+        return config_status(args=[], **to_str(sanitized_config, encoding))
     return 0
 
 

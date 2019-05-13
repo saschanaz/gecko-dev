@@ -269,7 +269,7 @@ class PartialConfigDict(object):
         existing_files = self._load_config_track()
 
         new_files = set()
-        for k, v in values.iteritems():
+        for k, v in six.iteritems(values):
             new_files.add(self._write_file(k, v))
 
         for filename in existing_files - new_files:
