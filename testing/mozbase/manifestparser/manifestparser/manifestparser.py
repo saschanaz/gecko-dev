@@ -4,10 +4,7 @@
 
 from __future__ import absolute_import, print_function
 
-try:
-    from io import StringIO
-except:
-    from StringIO import StringIO
+from six.moves import StringIO
 import json
 import fnmatch
 import os
