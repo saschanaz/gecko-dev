@@ -97,7 +97,7 @@ class MachRegistrar(object):
             context.handler = handler
             instance = cls(context)
         else:
-            instance = cls(context)
+            instance = cls()
 
         return instance
 
