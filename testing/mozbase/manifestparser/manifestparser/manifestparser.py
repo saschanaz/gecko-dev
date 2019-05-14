@@ -23,10 +23,7 @@ from .filters import (
 __all__ = ['ManifestParser', 'TestManifest', 'convert']
 
 relpath = os.path.relpath
-if sys.version_info[0] == 2:
-    string = (basestring,)
-else:
-    string = (str,)
+from six import string_types
 
 
 # path normalization
@@ -123,7 +120,7 @@ class ManifestParser(object):
             return include_file
 
         # get directory of this file if not file-like object
-        if isinstance(filename, string):
+        if isinstance(filename, string_types):
             # If we're using mercurial as our filesystem via a finder
             # during manifest reading, the getcwd() calls that happen
             # with abspath calls will not be meaningful, so absolute
@@ -267,7 +264,7 @@ class ManifestParser(object):
 
         # ensure all files exist
         missing = [filename for filename in filenames
-                   if isinstance(filename, string) and not self.path_exists(filename)]
+                   if isinstance(filename, string_types) and not self.path_exists(filename)]
         if missing:
             raise IOError('Missing files: %s' % ', '.join(missing))
 
@@ -280,7 +277,7 @@ class ManifestParser(object):
             # set the per file defaults
             defaults = _defaults.copy()
             here = None
-            if isinstance(filename, string):
+            if isinstance(filename, string_types):
                 here = os.path.dirname(os.path.abspath(filename))
                 defaults['here'] = here  # directory of master .ini file
 
@@ -412,7 +409,7 @@ class ManifestParser(object):
         """
 
         files = set([])
-        if isinstance(directories, basestring):
+        if isinstance(directories, string_types):
             directories = [directories]
 
         # get files in directories
@@ -449,7 +446,7 @@ class ManifestParser(object):
 
         # open file if `fp` given as string
         close = False
-        if isinstance(fp, string):
+        if isinstance(fp, string_types):
             fp = file(fp, 'w')
             close = True
 
@@ -605,7 +602,7 @@ class ManifestParser(object):
         internal function to import directories
         """
 
-        if isinstance(pattern, basestring):
+        if isinstance(pattern, string_types):
             patterns = [pattern]
         else:
             patterns = pattern
@@ -728,7 +725,7 @@ class ManifestParser(object):
         # determine output
         opened_manifest_file = None  # name of opened manifest file
         absolute = not relative_to  # whether to output absolute path names as names
-        if isinstance(write, string):
+        if isinstance(write, string_types):
             opened_manifest_file = write
             write = file(write, 'w')
         if write is None:
