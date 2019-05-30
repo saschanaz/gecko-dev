@@ -8,7 +8,6 @@ import codecs
 import itertools
 import logging
 import os
-import six
 import sys
 import textwrap
 
@@ -27,6 +26,7 @@ from mozbuild.util import (
     to_str,
 )
 import mozpack.path as mozpath
+import six
 
 
 def main(argv):
@@ -81,13 +81,12 @@ def config_status(config):
             #!%(python)s
             # coding=%(encoding)s
             from __future__ import unicode_literals
-            from mozbuild.util import to_str
             encoding = '%(encoding)s'
         ''') % {'python': config['PYTHON'], 'encoding': encoding})
         # A lot of the build backend code is currently expecting byte
         # strings and breaks in subtle ways with unicode strings. (bug 1296508)
         for k, v in six.iteritems(sanitized_config):
-            fh.write('%s = to_str(%s, encoding)\n' % (k, indented_repr(v)))
+            fh.write('%s = %s\n' % (k, indented_repr(v)))
         fh.write("__all__ = ['topobjdir', 'topsrcdir', 'defines', "
                  "'non_global_defines', 'substs', 'mozconfig']")
 
