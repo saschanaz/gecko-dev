@@ -215,7 +215,7 @@ class LineIO(object):
         if self._buf:
             lines[0] = self._buf + lines[0]
             self._buf = ''
-        if not buf.endswith('\n'):
+        if not buf.endswith(b'\n'):
             self._buf = lines.pop()
 
         for line in lines:

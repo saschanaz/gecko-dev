@@ -70,7 +70,7 @@ def check_build_environment(help, dist):
     # Check for CRLF line endings.
     with open(os.path.join(topsrcdir, 'configure.py'), 'rb') as fh:
         data = fh.read()
-        if '\r' in data:
+        if b'\r' in data:
             die('\n ***\n'
                 ' * The source tree appears to have Windows-style line endings.\n'
                 ' *\n'

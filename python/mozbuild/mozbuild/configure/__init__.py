@@ -934,6 +934,8 @@ class ConfigureSandbox(dict):
             return
         if not isinstance(name, six.string_types):
             raise TypeError("Unexpected type: '%s'" % type(name).__name__)
+        if isinstance(value, bytes):
+            value = value.decode('ascii')
         if name in data:
             raise ConfigureError(
                 "Cannot add '%s' to configuration: Key already "
