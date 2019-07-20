@@ -699,6 +699,95 @@ class IDLInterfaceOrInterfaceMixinOrNamespace(IDLObjectWithScope, IDLExposureMix
 
         IDLExposureMixins.finish(self, scope)
 
+        # Now go ahead and merge in our partial interfaces.
+        for partial in self._partialTypes:
+            partial.finish(scope)
+            self.addExtendedAttributes(partial.propagatedExtendedAttrs)
+            self.members.extend(partial.members)
+    
+    def validate(self):
+
+        def checkDuplicateNames(member, name, attributeName):
+            for m in self.members:
+                if m.identifier.name == name:
+                    raise WebIDLError("[%s=%s] has same name as interface member" %
+                                      (attributeName, name),
+                                      [member.location, m.location])
+                if m.isMethod() and m != member and name in m.aliases:
+                    raise WebIDLError("conflicting [%s=%s] definitions" %
+                                      (attributeName, name),
+                                      [member.location, m.location])
+                if m.isAttr() and m != member and name in m.bindingAliases:
+                    raise WebIDLError("conflicting [%s=%s] definitions" %
+                                      (attributeName, name),
+                                      [member.location, m.location])
+        
+        for member in self.members:
+            member.validate()
+
+            # Check that PutForwards refers to another attribute and that no
+            # cycles exist in forwarded assignments.
+            if member.isAttr():
+                iface = self
+                attr = member
+                putForwards = attr.getExtendedAttribute("PutForwards")
+                while putForwards is not None:
+                    forwardIface = attr.type.unroll().inner
+                    fowardAttr = None
+
+                    for forwardedMember in forwardIface.members:
+                        if (not forwardedMember.isAttr() or
+                            forwardedMember.identifier.name != putForwards[0]):
+                            continue
+                        if forwardedMember == member:
+                            raise WebIDLError("Cycle detected in forwarded "
+                                              "assignments for attribute %s on "
+                                              "%s" %
+                                              (member.identifier.name, self),
+                                              [member.location])
+                        fowardAttr = forwardedMember
+                        break
+
+                    if fowardAttr is None:
+                        raise WebIDLError("Attribute %s on %s forwards to "
+                                          "missing attribute %s" %
+                                          (attr.identifier.name, iface, putForwards),
+                                          [attr.location])
+
+                    iface = forwardIface
+                    attr = fowardAttr
+                    putForwards = attr.getExtendedAttribute("PutForwards")
+
+            # Check that the name of an [Alias] doesn't conflict with an
+            # interface member and whether we support indexed properties.
+            if member.isMethod():
+                for alias in member.aliases:
+                    if (member.getExtendedAttribute("Exposed") or
+                        member.getExtendedAttribute("ChromeOnly") or
+                        member.getExtendedAttribute("Pref") or
+                        member.getExtendedAttribute("Func") or
+                        member.getExtendedAttribute("SecureContext")):
+                        raise WebIDLError("[Alias] must not be used on a "
+                                          "conditionally exposed operation",
+                                          [member.location])
+                    if member.isIdentifierLess():
+                        raise WebIDLError("[Alias] must not be used on an "
+                                          "identifierless operation",
+                                          [member.location])
+                    if member.isUnforgeable():
+                        raise WebIDLError("[Alias] must not be used on an "
+                                          "[Unforgeable] operation",
+                                          [member.location])
+
+                    checkDuplicateNames(member, alias, "Alias")
+
+            # Check that the name of a [BindingAlias] doesn't conflict with an
+            # interface member.
+            if member.isAttr():
+                for bindingAlias in member.bindingAliases:
+                    checkDuplicateNames(member, bindingAlias, "BindingAlias")
+
+
     def typeName(self):
         if self.isInterface():
             return "interface"
@@ -740,9 +829,34 @@ class IDLInterfaceMixin(IDLInterfaceOrInterfaceMixinOrNamespace):
     def finish(self, scope):
         IDLInterfaceOrInterfaceMixinOrNamespace.finish(self, scope)
 
+        # Now that we've merged in our partial mixins, set the
+        # _exposureGlobalNames on any members that don't have it set yet.  Note
+        # that any partial interfaces that had [Exposed] set have already set up
+        # _exposureGlobalNames on all the members coming from them, so this is
+        # just implementing the "members default to interface that defined them"
+        # and "partial interfaces default to interface they're a partial for"
+        # rules from the spec.
+        for m in self.members:
+            # If m, or the partial interface m came from, had [Exposed]
+            # specified, it already has a nonempty exposure global names set.
+            if len(m._exposureGlobalNames) == 0:
+                m._exposureGlobalNames.update(self._exposureGlobalNames)
+
+        # resolve() will modify self.members, so we need to iterate
+        # over a copy of the member list here.
+        for member in list(self.members):
+            member.resolve(self)
+
         for member in self.members:
             member.finish(scope)
 
+        # Now that we've finished our members, which has updated their exposure
+        # sets, make sure they aren't exposed in places where we are not.
+        for member in self.members:
+            if not member.exposureSet.issubset(self.exposureSet):
+                raise WebIDLError("Interface member has larger exposure set "
+                                  "than the interface itself",
+                                  [member.location, self.location])
 
 class IDLInterfaceOrNamespace(IDLInterfaceOrInterfaceMixinOrNamespace):
     def __init__(self, location, parentScope, name, parent, members,
@@ -820,6 +934,7 @@ class IDLInterfaceOrNamespace(IDLInterfaceOrInterfaceMixinOrNamespace):
         self._finished = True
 
         IDLInterfaceOrInterfaceMixinOrNamespace.finish(self, scope)
+
         if len(self.legacyWindowAliases) > 0:
             if not self.hasInterfaceObject():
                 raise WebIDLError("Interface %s unexpectedly has [LegacyWindowAlias] "
@@ -829,12 +944,6 @@ class IDLInterfaceOrNamespace(IDLInterfaceOrInterfaceMixinOrNamespace):
                 raise WebIDLError("Interface %s has [LegacyWindowAlias] "
                                   "but not exposed in Window" % self.identifier.name,
                                   [self.location])
-
-        # Now go ahead and merge in our partial interfaces.
-        for partial in self._partialTypes:
-            partial.finish(scope)
-            self.addExtendedAttributes(partial.propagatedExtendedAttrs)
-            self.members.extend(partial.members)
 
         # Generate maplike/setlike interface members. Since generated members
         # need to be treated like regular interface members, do this before
@@ -1289,100 +1398,42 @@ class IDLInterfaceOrNamespace(IDLInterfaceOrInterfaceMixinOrNamespace):
 
         indexedGetter = None
         hasLengthAttribute = False
-        for member in self.members:
-            member.validate()
 
+        IDLInterfaceOrInterfaceMixinOrNamespace.validate(self)
+
+        for member in self.members:
             if self.isCallback() and member.getExtendedAttribute("Replaceable"):
                 raise WebIDLError("[Replaceable] used on an attribute on "
                                   "interface %s which is a callback interface" %
                                   self.identifier.name,
                                   [self.location, member.location])
 
-            # Check that PutForwards refers to another attribute and that no
-            # cycles exist in forwarded assignments.  Also check for a
-            # integer-typed "length" attribute.
+            # Check that PutForwards is not in a callback interface.
+            # Also check for a integer-typed "length" attribute.
             if member.isAttr():
                 if (member.identifier.name == "length" and
                     member.type.isInteger()):
                     hasLengthAttribute = True
 
-                iface = self
-                attr = member
-                putForwards = attr.getExtendedAttribute("PutForwards")
+                putForwards = member.getExtendedAttribute("PutForwards")
                 if putForwards and self.isCallback():
                     raise WebIDLError("[PutForwards] used on an attribute "
                                       "on interface %s which is a callback "
                                       "interface" % self.identifier.name,
                                       [self.location, member.location])
-
-                while putForwards is not None:
-                    forwardIface = attr.type.unroll().inner
-                    fowardAttr = None
-
-                    for forwardedMember in forwardIface.members:
-                        if (not forwardedMember.isAttr() or
-                            forwardedMember.identifier.name != putForwards[0]):
-                            continue
-                        if forwardedMember == member:
-                            raise WebIDLError("Cycle detected in forwarded "
-                                              "assignments for attribute %s on "
-                                              "%s" %
-                                              (member.identifier.name, self),
-                                              [member.location])
-                        fowardAttr = forwardedMember
-                        break
-
-                    if fowardAttr is None:
-                        raise WebIDLError("Attribute %s on %s forwards to "
-                                          "missing attribute %s" %
-                                          (attr.identifier.name, iface, putForwards),
-                                          [attr.location])
-
-                    iface = forwardIface
-                    attr = fowardAttr
-                    putForwards = attr.getExtendedAttribute("PutForwards")
-
-            # Check that the name of an [Alias] doesn't conflict with an
-            # interface member and whether we support indexed properties.
             if member.isMethod():
                 if member.isGetter() and member.isIndexed():
                     indexedGetter = member
 
-                for alias in member.aliases:
+                if len(member.aliases) > 0:
                     if self.isOnGlobalProtoChain():
                         raise WebIDLError("[Alias] must not be used on a "
                                           "[Global] interface operation",
-                                          [member.location])
-                    if (member.getExtendedAttribute("Exposed") or
-                        member.getExtendedAttribute("ChromeOnly") or
-                        member.getExtendedAttribute("Pref") or
-                        member.getExtendedAttribute("Func") or
-                        member.getExtendedAttribute("SecureContext")):
-                        raise WebIDLError("[Alias] must not be used on a "
-                                          "conditionally exposed operation",
                                           [member.location])
                     if member.isStatic():
                         raise WebIDLError("[Alias] must not be used on a "
                                           "static operation",
                                           [member.location])
-                    if member.isIdentifierLess():
-                        raise WebIDLError("[Alias] must not be used on an "
-                                          "identifierless operation",
-                                          [member.location])
-                    if member.isUnforgeable():
-                        raise WebIDLError("[Alias] must not be used on an "
-                                          "[Unforgeable] operation",
-                                          [member.location])
-
-                    checkDuplicateNames(member, alias, "Alias")
-
-            # Check that the name of a [BindingAlias] doesn't conflict with an
-            # interface member.
-            if member.isAttr():
-                for bindingAlias in member.bindingAliases:
-                    checkDuplicateNames(member, bindingAlias, "BindingAlias")
-
-
         # Conditional exposure makes no sense for interfaces with no
         # interface object, unless they're navigator properties.
         # And SecureContext makes sense for interfaces with no interface object,
@@ -6069,7 +6120,8 @@ class Parser(Tokenizer):
 
     def p_MixinMember(self, p):
         """
-            MixinMember : AttributeOrOperation
+            MixinMember : Const
+                          | AttributeOrOperation
         """
         p[0] = p[1]
 
