@@ -93,6 +93,7 @@ SOURCES += [
     'nsFilePicker.cpp',
     'nsWidgetFactory.cpp',
     'WinCompositorWidget.cpp',
+    'WindowsShare.cpp',
     'WindowsUIUtils.cpp',
     'WinMouseScrollHandler.cpp',
 ]
